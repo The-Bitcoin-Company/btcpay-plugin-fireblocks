@@ -1,0 +1,119 @@
+name: fireblocks-dev
+
+services:
+  plugin-build:
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile
+    volumes:
+      - ../artifacts/dev-plugin:/output
+
+  btcpay:
+    image: btcpayserver/btcpayserver:2.4.7
+    restart: unless-stopped
+    depends_on:
+      plugin-build:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      nbxplorer:
+        condition: service_started
+    environment:
+      BTCPAY_NETWORK: regtest
+      BTCPAY_CHAINS: btc
+      BTCPAY_BIND: 0.0.0.0:8080
+      BTCPAY_HOST: localhost:14142
+      BTCPAY_POSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=btcpayserver
+      BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=nbxplorer
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      BTCPAY_PLUGINDIR: /datadir/Plugins
+      BTCPAY_ALLOW-ADMIN-REGISTRATION: "true"
+      BTCPAY_DISABLE-REGISTRATION: "false"
+      BTCPAY_CHEATMODE: "true"
+      BTCPAY_RECOMMENDED-PLUGINS: ""
+      BTCPAY_UPDATEURL: ""
+      BTCPAY_VERBOSE: "true"
+    ports:
+      - 127.0.0.1:14142:8080
+    volumes:
+      - btcpay_datadir:/datadir
+      - ../artifacts/dev-plugin:/datadir/Plugins/BTCPayServer.Plugins.Fireblocks:ro
+
+  postgres:
+    image: postgres:18.1
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: ["-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - postgres_datadir:/var/lib/postgresql
+
+  nbxplorer:
+    image: nicolasdorier/nbxplorer:2.6.20
+    restart: unless-stopped
+    depends_on:
+      bitcoind:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      NBXPLORER_NETWORK: regtest
+      NBXPLORER_CHAINS: btc
+      NBXPLORER_BTCRPCURL: http://bitcoind:43782/
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:39388
+      NBXPLORER_BTCRPCUSER: ceiwHEbqWI83
+      NBXPLORER_BTCRPCPASSWORD: DwubwWsoo3
+      NBXPLORER_BIND: 0.0.0.0:32838
+      NBXPLORER_POSTGRES: User ID=postgres;Include Error Detail=true;Host=postgres;Port=5432;Database=nbxplorer
+      NBXPLORER_EXPOSERPC: "1"
+      NBXPLORER_NOAUTH: "1"
+      NBXPLORER_VERBOSE: "1"
+    volumes:
+      - nbxplorer_datadir:/datadir
+
+  bitcoind:
+    image: btcpayserver/bitcoin:32.1
+    restart: unless-stopped
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_WALLETDIR: /data/wallets
+      BITCOIN_EXTRA_ARGS: |
+        rpcuser=ceiwHEbqWI83
+        rpcpassword=DwubwWsoo3
+        rpcport=43782
+        rpcbind=0.0.0.0:43782
+        rpcallowip=0.0.0.0/0
+        port=39388
+        whitelist=0.0.0.0/0
+        zmqpubrawblock=tcp://0.0.0.0:28332
+        zmqpubrawtx=tcp://0.0.0.0:28333
+        fallbackfee=0.0002
+        minrelaytxfee=0.00001000
+        unsafesqlitesync=1
+    volumes:
+      - bitcoin_datadir:/data
+
+  ci:
+    profiles: [manual]
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile
+    working_dir: /src
+    environment:
+      NUGET_PACKAGES: /nuget
+    volumes:
+      - ..:/src
+      - nuget_cache:/nuget
+    command: ["bash", "scripts/ci.sh"]
+
+volumes:
+  bitcoin_datadir:
+  btcpay_datadir:
+  nbxplorer_datadir:
+  nuget_cache:
+  postgres_datadir:
