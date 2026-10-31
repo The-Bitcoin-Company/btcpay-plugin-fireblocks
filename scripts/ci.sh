@@ -29,4 +29,10 @@ dotnet test tests/BTCPayServer.Plugins.Fireblocks.Tests -c Release --no-build --
 rm -rf artifacts/publish artifacts/package
 dotnet publish "$project" -c Release --no-build --no-restore -o artifacts/publish -p:ContinuousIntegrationBuild=true
 dotnet run --project "$packer" -c Release --no-restore -p:ContinuousIntegrationBuild=true -- artifacts/publish "$plugin" artifacts/package
-python3 scripts/verify_package.py "artifacts/package/$plugin/$version"
+directory="artifacts/package/$plugin/$version"
+python3 scripts/verify_package.py "$directory"
+# Upload this directory itself so download-artifact exposes checksums and assets
+# at the artifact root (not inside a version subdirectory).
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "directory=$directory" >> "$GITHUB_OUTPUT"
+fi

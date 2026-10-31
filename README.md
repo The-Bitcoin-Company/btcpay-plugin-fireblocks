@@ -106,8 +106,9 @@ bit-for-bit reproducibility across different operating systems or dependency fee
 
 Download `fireblocks-plugin` from a workflow run's **Artifacts** section (including PR builds);
 GitHub wraps the package files in an outer ZIP. Test results are uploaded separately.
-For a release, update the project `<Version>` and `Plugin.Version` together, merge the reviewed
-change, then push a matching tag such as `v0.1.0`. Mismatched tags fail before building.
+For a release, update the project `<Version>` and the version assertion in `PluginTests.cs`
+(the plugin reads its version from assembly metadata), merge the reviewed change, then push a
+matching tag such as `v0.1.0`. Mismatched tags fail before building.
 After the full gate passes, the tag workflow creates a GitHub release and attaches the `.btcpay`,
 `.btcpay.json`, and checksums. Rerunning a tag build replaces that release's assets.
 
