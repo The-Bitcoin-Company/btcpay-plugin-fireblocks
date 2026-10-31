@@ -57,7 +57,10 @@ services:
     image: nicolasdorier/nbxplorer:2.6.20
     restart: unless-stopped
     depends_on:
-      - bitcoind
+      bitcoind:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     environment:
       NBXPLORER_NETWORK: regtest
       NBXPLORER_CHAINS: btc
@@ -71,7 +74,7 @@ services:
       NBXPLORER_NOAUTH: "1"
       NBXPLORER_VERBOSE: "1"
     volumes:
-      - nbxplorer_datadir:/data
+      - nbxplorer_datadir:/datadir
 
   bitcoind:
     image: btcpayserver/bitcoin:32.1

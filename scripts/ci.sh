@@ -20,6 +20,7 @@ sdk = json.loads(Path('global.json').read_text())['sdk']['version']
 assert f'dotnet/sdk:{sdk}-' in Path('submodules/btcpayserver/Dockerfile').read_text(), 'SDK pin must match the pinned host Dockerfile'
 PY
 python3 scripts/test_verify_package.py
+python3 -m unittest discover -s dev -p 'test_*.py'
 
 dotnet restore BTCPayServer.Plugins.Fireblocks.slnx
 dotnet restore "$packer"

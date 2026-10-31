@@ -77,7 +77,7 @@ Then inspect logs and exercise the baseline checkout UI:
 ```bash
 # Create an invoice through the local Greenfield API and print its checkout URL.
 python3 dev/create-invoice.py
-# Optional amount/currency:
+# Optional amount/currency (fiat invoices require an available rate source):
 python3 dev/create-invoice.py --amount 25 --currency USD
 
 # Inspect plugin loading and application errors.
@@ -90,8 +90,14 @@ Open the printed checkout URL, or sign in and use **Stores â†’ Fireblocks Dev â†
 Invoice**. Seeding also configures a fixed **watch-only regtest BTC wallet** (no private keys are
 saved), so checkout has an on-chain payment method. The well-known development mnemonic is public
 and must never hold real funds. The helper uses only Python's standard library. Override
-`BTCPAY_DEV_URL`, `BTCPAY_DEV_EMAIL`, `BTCPAY_DEV_PASSWORD`, or `BTCPAY_DEV_STORE_NAME` when needed;
-`BTCPAY_DEV_STARTUP_TIMEOUT` controls the readiness wait in seconds (default 300).
+`BTCPAY_DEV_URL`, `BTCPAY_DEV_EMAIL`, `BTCPAY_DEV_PASSWORD`, or `BTCPAY_DEV_STORE_NAME` when needed.
+For production isolation, `BTCPAY_DEV_URL` must be loopback and API redirects are refused.
+`BTCPAY_DEV_STARTUP_TIMEOUT` controls the readiness wait in seconds (default 300). Seeding stores
+an unrestricted key for the disposable admin in `artifacts/dev/api-key` with owner-only permissions;
+routine calls use that key to avoid Basic-auth expiry and login throttling. The key is ignored by Git
+and automatically replaced if stale. Basic auth is also enabled as a recovery path. If both local
+authentication methods are lost, enable **Greenfield Basic Auth** in the local user's settings or
+recreate the stack with `down --volumes`.
 
 Stop the stack while retaining data, or delete all local harness data and start fresh:
 
@@ -102,7 +108,7 @@ docker compose -f dev/docker-compose.yml down --volumes
 
 ### Run the CI gate in the harness
 
-Use the following command to run the exact Release build, plugin tests, package checks, and
+Use the following command to run the exact Release build, plugin and helper tests, package checks, and
 `scripts/ci.sh` gate in the pinned SDK container rather than relying on a host .NET installation:
 
 ```bash

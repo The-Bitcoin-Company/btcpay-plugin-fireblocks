@@ -10,8 +10,8 @@ from btcpay import BASE_URL, ensure_store, request, wait_until_ready
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--amount", default="10.00", help="invoice amount (default: 10.00)")
-    parser.add_argument("--currency", default="USD", help="invoice currency (default: USD)")
+    parser.add_argument("--amount", default="0.001", help="invoice amount (default: 0.001)")
+    parser.add_argument("--currency", default="BTC", help="invoice currency (default: BTC)")
     args = parser.parse_args()
 
     wait_until_ready()
