@@ -20,7 +20,19 @@ public class PluginTests
         Assert.Contains("No payment processing is implemented", plugin.Description);
         var dependency = Assert.Single(plugin.Dependencies);
         Assert.Equal("BTCPayServer", dependency.Identifier);
-        Assert.Equal(">=2.4.7 <2.5.0", dependency.Condition);
+        Assert.Equal(">=2.4.7 && <2.5.0", dependency.Condition);
+    }
+
+    [Theory]
+    [InlineData("2.4.6", false)]
+    [InlineData("2.4.7", true)]
+    [InlineData("2.4.8", true)]
+    [InlineData("2.5.0", false)]
+    public void DependencyEnforcesSupportedHostVersions(string version, bool supported)
+    {
+        var dependency = Assert.Single(new Plugin().Dependencies);
+        Assert.True(VersionCondition.TryParse(dependency.Condition, out _));
+        Assert.Equal(supported, dependency.ParseCondition().IsFulfilled(Version.Parse(version)));
     }
 
     [Fact]

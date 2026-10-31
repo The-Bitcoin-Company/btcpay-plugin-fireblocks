@@ -38,7 +38,7 @@ The current template uses a **ProjectReference to a source submodule, not a BTCP
 The BTCPay dependency is therefore pinned by the gitlink at `submodules/btcpayserver`:
 **v2.4.7**, commit `2868deedd9d911b715fec7306ea9cada36d86bff`.
 Do not replace this with an unversioned checkout or an invented package reference.
-The runtime dependency is `>=2.4.7 <2.5.0`; earlier 2.4 patches and 2.5+ are not declared supported.
+The runtime dependency is `>=2.4.7 && <2.5.0`; earlier 2.4 patches and 2.5+ are not declared supported.
 When upgrading, update the submodule pin, dependency condition, and tests together.
 
 ## Run against the local BTCPay checkout
@@ -83,3 +83,7 @@ Plugins run with the host's privileges: use a disposable development instance, n
 `Plugin.Execute(IServiceCollection)` calls `AddFireblocksPaymentMethod()`. This currently returns the
 same collection without changing registrations. Add the real handler registration there in a later
 issue; do not advertise a fake payment method or add provider configuration to this scaffold.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
