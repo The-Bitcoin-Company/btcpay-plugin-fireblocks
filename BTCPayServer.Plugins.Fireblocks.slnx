@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/misc/">
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path="LICENSE" />
+    <File Path="plugin-env.sh" />
+    <File Path="plugin-register.sh" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BTCPayServer.Plugins.Fireblocks/BTCPayServer.Plugins.Fireblocks.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BTCPayServer.Plugins.Fireblocks.Tests/BTCPayServer.Plugins.Fireblocks.Tests.csproj" />
+  </Folder>
+</Solution>
