@@ -1,0 +1,1 @@
+export PROJECT="BTCPayServer.Plugins.Fireblocks"
