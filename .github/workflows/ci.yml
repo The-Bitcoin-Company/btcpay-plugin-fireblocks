@@ -74,6 +74,18 @@ jobs:
           path: artifacts/test-results/*.trx
           retention-days: 14
 
+  nix-flake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The flake fetches its independently pinned BTCPay source input.
+          persist-credentials: false
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - name: Check flake and build plugin package
+        run: nix flake check --print-build-logs
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
