@@ -49,7 +49,7 @@
     <div class="form-group">
         <label asp-for="PaymentExpiryMinutes" class="form-label" data-required></label>
         <input asp-for="PaymentExpiryMinutes" class="form-control" min="1" max="525600" />
-        <div class="form-text">Caps each attempt's lifetime without extending the BTCPay invoice expiration. Flow expiry uses the earlier deadline.</div>
+        <div class="form-text">Uses the earlier policy and current invoice deadline. Avoid concurrent edits to invoice expiry while activating a payment.</div>
         <span asp-validation-for="PaymentExpiryMinutes" class="text-danger"></span>
     </div>
     <button type="submit" class="btn btn-primary mt-4">Save settings</button>

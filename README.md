@@ -248,8 +248,9 @@ endpoint for `FIREBLOCKS-FLOW`:
 - **Maximum payment lifetime in minutes**. During initial or lazy prompt creation the plugin sets the
   BTCPay invoice expiration to the earlier of its existing expiration and this policy deadline, using
   BTCPay's invoice-expiry API for an already-persisted invoice. This keeps checkout and the Flow link on
-  the same local lifetime, but can also shorten other payment methods on that invoice; it never extends
-  the invoice's lifetime. Open checkout also hides the link when its effective local/provider deadline
+  the same local lifetime, but can also shorten other payment methods on that invoice. The service
+  re-checks the persisted deadline before shortening; this is not an atomic compare-and-swap if an
+  operator concurrently edits invoice expiry. Open checkout also hides the link when its effective local/provider deadline
   passes, even if no status update arrives.
 
 Only fixed-amount **USD** invoices are supported. Requests use payment mode with `currency: "USD"`;

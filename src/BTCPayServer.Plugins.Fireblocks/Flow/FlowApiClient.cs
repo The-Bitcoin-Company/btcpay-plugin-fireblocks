@@ -140,8 +140,19 @@ public sealed partial class FlowApiClient(
     {
         if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(credential))
             return false;
-        return value.Contains(credential, StringComparison.Ordinal) ||
-            value.Contains(Uri.EscapeDataString(credential), StringComparison.OrdinalIgnoreCase);
+        if (value.Contains(credential, StringComparison.Ordinal))
+            return true;
+        try
+        {
+            // Handle partially or fully percent-encoded credentials, including a
+            // second encoding layer, before any value can reach persistence/UI.
+            var decoded = Uri.UnescapeDataString(Uri.UnescapeDataString(value));
+            return decoded.Contains(credential, StringComparison.Ordinal);
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
     }
 
     public static string Redact(string? value, string credential)
@@ -152,6 +163,10 @@ public sealed partial class FlowApiClient(
         if (!string.IsNullOrEmpty(credential))
             redacted = redacted.Replace(credential, "[redacted]", StringComparison.Ordinal);
         redacted = BearerCredentialRegex().Replace(redacted, "$1[redacted]");
+        // Partially encoded secrets do not have a safe literal replacement. If any
+        // remain after ordinary redaction, suppress the complete detail instead.
+        if (ContainsCredential(redacted, credential))
+            return "[redacted]";
         return redacted.Length <= 512 ? redacted : redacted[..512];
     }
 

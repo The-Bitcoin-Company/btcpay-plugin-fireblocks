@@ -160,6 +160,41 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task PartiallyPercentEncodedCredentialInSuccessfulUrlIsRejected()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"https://pay.dynamic.test/?token=%74est-flow-secret"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.True(exception.Uncertain);
+        Assert.Contains("credential material", exception.Message);
+    }
+
+    [Fact]
+    public async Task PartiallyPercentEncodedCredentialInErrorIsSuppressed()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json("""{"error":"bad %74est-flow-secret"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+        Assert.DoesNotContain("%74est-flow-secret", exception.Message);
+        Assert.Contains("[redacted]", exception.Message);
+    }
+
+    [Fact]
     public async Task ProductionRejectsInsecureReturnedPaymentUrl()
     {
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
