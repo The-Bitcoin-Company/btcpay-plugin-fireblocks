@@ -1,0 +1,56 @@
+@model BTCPayServer.Plugins.Fireblocks.Controllers.FireblocksStoreConfigViewModel
+@{
+    ViewData.SetLayoutModel(new LayoutModel("Fireblocks", "Fireblocks Flow").SetCategory(WellKnownCategories.Store));
+    Layout = "_Layout";
+}
+
+<h2 class="mb-4">Fireblocks Flow</h2>
+<p class="text-muted mb-4">
+    Create hosted Dynamic Flow payment links for USD invoices. Settlement is fixed to USDC on Solana.
+    This integration creates payment links only; it does not mark invoices paid from link visits or browser returns.
+</p>
+
+<form method="post" asp-action="Configure" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
+    <div asp-validation-summary="ModelOnly" class="text-danger"></div>
+    <div class="form-check form-switch mb-4">
+        <input asp-for="Enabled" class="form-check-input" />
+        <label asp-for="Enabled" class="form-check-label">Enable Fireblocks Flow at checkout</label>
+    </div>
+    <div class="form-group">
+        <label asp-for="EnvironmentId" class="form-label" data-required></label>
+        <input asp-for="EnvironmentId" class="form-control" autocomplete="off" />
+        <span asp-validation-for="EnvironmentId" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="ApiEndpoint" class="form-label" data-required></label>
+        <input asp-for="ApiEndpoint" class="form-control" />
+        <div class="form-text">Use HTTPS in production. Plain HTTP is accepted only for the local fake provider.</div>
+        <span asp-validation-for="ApiEndpoint" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="ApiCredential" class="form-label" data-required="@(!Model.HasApiCredential)"></label>
+        <input asp-for="ApiCredential" type="password" class="form-control" autocomplete="new-password"
+               placeholder="@(Model.HasApiCredential ? "Leave blank to keep the saved token" : "Token with flow.write scope")" />
+        <div class="form-text">Stored only in server-side store configuration and never returned to the browser or Greenfield responses.</div>
+        <span asp-validation-for="ApiCredential" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="HostedPaymentBaseUrl" class="form-label" data-required></label>
+        <input asp-for="HostedPaymentBaseUrl" class="form-control" />
+        <div class="form-text">Use https://pay.dynamicauth.com for Dynamic's hosted page; its origin must be registered for the environment.</div>
+        <span asp-validation-for="HostedPaymentBaseUrl" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="SolanaDestinationAddress" class="form-label" data-required></label>
+        <input asp-for="SolanaDestinationAddress" class="form-control" autocomplete="off" />
+        <div class="form-text">One base58 Solana address. The USDC mint and Solana mainnet chain identifiers are fixed by the plugin.</div>
+        <span asp-validation-for="SolanaDestinationAddress" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="PaymentExpiryMinutes" class="form-label" data-required></label>
+        <input asp-for="PaymentExpiryMinutes" class="form-control" min="1" max="525600" />
+        <div class="form-text">Caps each attempt's lifetime without extending the BTCPay invoice expiration. Flow expiry uses the earlier deadline.</div>
+        <span asp-validation-for="PaymentExpiryMinutes" class="text-danger"></span>
+    </div>
+    <button type="submit" class="btn btn-primary mt-4">Save settings</button>
+</form>

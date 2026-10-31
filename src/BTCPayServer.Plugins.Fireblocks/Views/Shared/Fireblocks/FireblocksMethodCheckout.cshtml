@@ -1,0 +1,30 @@
+@model BTCPayServer.Models.InvoicingModels.CheckoutModel
+@using BTCPayServer.Plugins.Fireblocks.Payments
+
+<template id="@FireblocksCheckoutModelExtension.CheckoutBodyComponentName">
+    <div class="payment-box">
+        <p class="text-muted">
+            Pay this USD invoice through Fireblocks Flow. The merchant receives USDC on Solana.
+        </p>
+        <a class="btn btn-primary rounded-pill w-100 mt-3" id="PayWithFireblocksFlow"
+           :href="model.fireblocksPaymentUrl" target="_blank" rel="noopener noreferrer">
+            Open hosted Flow payment
+        </a>
+        <div class="input-group mt-3" v-if="model.fireblocksPaymentUrl">
+            <div class="form-floating">
+                <vc:truncate-center text="model.fireblocksPaymentUrl" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                <label>Hosted payment link</label>
+            </div>
+        </div>
+        <p class="text-muted small mt-3 mb-0">
+            Opening this link or returning to BTCPay does not confirm payment or change the invoice state.
+        </p>
+    </div>
+</template>
+
+<script>
+    Vue.component(@Safe.Json(FireblocksCheckoutModelExtension.CheckoutBodyComponentName), {
+        props: ['model'],
+        template: @Safe.Json("#" + FireblocksCheckoutModelExtension.CheckoutBodyComponentName)
+    });
+</script>

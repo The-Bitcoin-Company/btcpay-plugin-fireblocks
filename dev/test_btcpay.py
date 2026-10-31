@@ -151,5 +151,20 @@ class SeedTests(unittest.TestCase):
         )
 
 
+class FlowConfigurationTests(unittest.TestCase):
+    @patch("btcpay.request")
+    def test_fake_configuration_never_accepts_secret_in_response(self, request) -> None:
+        request.return_value = {"paymentMethodId": "FIREBLOCKS-FLOW", "enabled": True}
+        result = btcpay.ensure_flow_configuration({"id": "store"})
+        self.assertTrue(result["enabled"])
+        config = request.call_args.args[2]["config"]
+        self.assertEqual(config["environmentId"], "dev-environment")
+        self.assertEqual(config["paymentExpiryMinutes"], 15)
+
+        request.return_value = {"config": {"apiCredential": "dev-flow-token"}}
+        with self.assertRaisesRegex(RuntimeError, "exposed"):
+            btcpay.ensure_flow_configuration({"id": "store"})
+
+
 if __name__ == "__main__":
     unittest.main()

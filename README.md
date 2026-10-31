@@ -1,7 +1,6 @@
 # BTCPay Server Fireblocks plugin
 
-Development scaffold only: **no payment method is enabled and no payments are processed**.
-There are no provider credentials, API clients, or provider configuration in this bootstrap.
+Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, with store-scoped Dynamic configuration and USDC settlement on Solana. This release covers payment creation and checkout only: **it does not confirm settlement or mark invoices paid**.
 
 ## Prerequisites
 
@@ -22,7 +21,7 @@ dotnet test
 ```
 
 `src/BTCPayServer.Plugins.Fireblocks` contains the plugin; `tests/BTCPayServer.Plugins.Fireblocks.Tests`
-contains metadata/discovery and no-op registration tests. The solution builds the referenced host;
+covers provider contracts, validation, credential redaction, persistence, timeout/error behavior, and checkout. The solution builds the referenced host;
 it does not run the host's database/browser integration suites. CI runs the Release build, these same
 plugin tests, and the package verifier via `bash scripts/ci.sh`.
 
@@ -102,14 +101,14 @@ The build container uses the same **.NET SDK 10.0.403** and **BTCPay v2.4.7** so
 It publishes to `artifacts/dev-plugin`, which is mounted read-only at
 `/datadir/Plugins/BTCPayServer.Plugins.Fireblocks` in the BTCPay container. Confirm startup by
 looking for `Running plugin BTCPayServer.Plugins.Fireblocks - 0.1.0` in the logs or by opening
-**Server Settings → Plugins**. The plugin remains an inert scaffold: it has no Fireblocks checkout
-payment method or provider configuration yet.
+**Server Settings → Plugins**. Seeding configures Fireblocks Flow against the disposable fake provider,
+so no real Dynamic environment or credential is needed locally.
 
 ### Develop, restart, and inspect
 
 After changing plugin source, rerun `./dev/up.sh`. It rebuilds changed layers, republishes the
 plugin, recreates BTCPay so the new assembly loads, and safely reuses the existing admin/store.
-Then inspect logs and exercise the baseline checkout UI:
+Then inspect logs and exercise BTC or fake Flow checkout:
 
 ```bash
 # Create an invoice through the local Greenfield API and print its checkout URL.
@@ -124,7 +123,9 @@ docker compose -f dev/docker-compose.yml logs -f bitcoind postgres nbxplorer
 ```
 
 Open the printed checkout URL, or sign in and use **Stores → Fireblocks Dev → Invoices → Create
-Invoice**. Seeding also configures a fixed **watch-only regtest BTC wallet** (no private keys are
+Invoice**. For Flow, create a **USD** invoice and select **FIREBLOCKS-FLOW** at checkout. Its hosted
+link points to the fake page at **http://localhost:14143**; visiting it never changes invoice state.
+Seeding also configures a fixed **watch-only regtest BTC wallet** (no private keys are
 saved), so checkout has an on-chain payment method. The well-known development mnemonic is public
 and must never hold real funds. The helper uses only Python's standard library. Override
 `BTCPAY_DEV_URL`, `BTCPAY_DEV_EMAIL`, `BTCPAY_DEV_PASSWORD`, or `BTCPAY_DEV_STORE_NAME` when needed.
@@ -175,7 +176,7 @@ source checkout, set `DEBUG_PLUGINS` to the same absolute DLL path in that check
 Rebuild after changes and restart BTCPay (or use a breakpoint in `Plugin.Execute` in your debugger).
 
 Look for `Running plugin BTCPayServer.Plugins.Fireblocks - 0.1.0` in the startup logs and the entry
-in **Server Settings → Plugins**. There is deliberately no payment-method UI yet.
+in **Server Settings → Plugins**. Configure the store through **Plugins → Fireblocks Flow**.
 Delete the generated `appsettings.dev.json` (or remove its `DEBUG_PLUGINS` entry) to unregister.
 Stop development dependencies with `docker compose down` from `BTCPayServer.Tests` when finished.
 
@@ -227,14 +228,61 @@ After the full gate passes, the tag workflow creates a GitHub release and attach
 
 Verify downloads with `sha256sum --check SHA256SUMS`. Install the `.btcpay` file via a compatible
 BTCPay instance's **Server Settings → Plugins → Upload Plugin** and restart when prompted.
-The metadata and checksums are companion files, not separate plugins. Packages remain a scaffold;
-release automation does not make payment processing available.
+The metadata and checksums are companion files, not separate plugins. Release packages contain the same payment-link integration; settlement processing remains a separate
+future change.
 
-## Future payment-method seam
+## Fireblocks Flow configuration
 
-`Plugin.Execute(IServiceCollection)` calls `AddFireblocksPaymentMethod()`. This currently returns the
-same collection without changing registrations. Add the real handler registration there in a later
-issue; do not advertise a fake payment method or add provider configuration to this scaffold.
+Configure a store under **Plugins → Fireblocks Flow**, or through the BTCPay payment-method Greenfield
+endpoint for `FIREBLOCKS-FLOW`:
+
+- **Dynamic environment ID** and **Flow API endpoint** (production default:
+  `https://app.dynamic.xyz/api/v0`).
+- **Server API token** with `flow.write` scope. It is used only by the server-side client. Blank UI
+  updates retain the saved token; configuration responses omit the credential.
+- **Hosted payment base URL** (production default: `https://pay.dynamicauth.com`). Register its origin
+  as an allowed CORS origin in Dynamic, as required by the payment-link API.
+- **Solana USDC destination address**, a valid base58 address. The request has exactly one settlement
+  (Solana mainnet chain `SOL`/`101`, USDC mint
+  `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, six decimals) and one matching destination.
+- **Maximum payment lifetime in minutes**. The Flow link expires at the earlier of this policy deadline
+  and the BTCPay invoice expiration; the plugin never extends the invoice's lifetime.
+
+Only fixed-amount **USD** invoices are supported. Requests use payment mode with `currency: "USD"`;
+the requested USD value is persisted separately from any eventual token settlement amount. Every
+attempt stores its immutable creation JSON, invoice/attempt correlation, Flow ID, hosted URL, requested
+USD amount, and expiry in the plugin's PostgreSQL schema. Known failures and expired attempts can be
+renewed without deleting history. A timeout, transport failure, 5xx response, or ambiguous success is
+recorded as uncertain and is not blindly retried while its original attempt is still active.
+
+The checkout displays only the hosted URL and public attempt metadata. There is no browser-return
+settlement endpoint, and opening a link does not add a BTCPay payment or change invoice state. Future
+settlement work must reconcile verified provider notifications or server-side Flow reads; it must not
+trust a browser return.
+
+### Local fake provider and failure modes
+
+`./dev/up.sh` starts `flow-fake` on loopback port `14143` and seeds a development-only token. The fake
+validates the same USD/USDC-Solana/expiry/correlation request shape and returns deterministic hosted
+links. Restarting BTCPay preserves the invoice/attempt/Flow binding. To inspect the persisted attempts,
+query the disposable database:
+
+```bash
+docker compose -f dev/docker-compose.yml exec -T postgres psql -U postgres -d btcpayserver \
+  -c 'SELECT invoice_id, id, state, flow_id, requested_usd, expires_at FROM "Fireblocks".fireblocks_payment_attempts;'
+```
+
+Exercise provider rejection or a delayed response by setting the fake mode before startup:
+
+```bash
+FLOW_FAKE_MODE=error ./dev/up.sh
+FLOW_FAKE_MODE=timeout FLOW_FAKE_TIMEOUT_SECONDS=30 ./dev/up.sh
+```
+
+The production API client has a 15-second timeout. After testing a failure, return to
+`FLOW_FAKE_MODE=success ./dev/up.sh`; use a new invoice for a clean successful attempt. The fake and
+its token are strictly development fixtures. Real API endpoints require HTTPS (plain HTTP is accepted
+only for the local fake), and real credentials must never be committed or pasted into documentation.
 
 ## License
 

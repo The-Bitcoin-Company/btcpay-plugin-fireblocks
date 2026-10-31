@@ -4,9 +4,10 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Product>BTCPay Server Fireblocks</Product>
-    <Description>Fireblocks integration scaffold for BTCPay Server. No payment processing is implemented.</Description>
+    <Description>Fireblocks Flow hosted payment links for BTCPay Server.</Description>
     <Version>0.1.0</Version>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 

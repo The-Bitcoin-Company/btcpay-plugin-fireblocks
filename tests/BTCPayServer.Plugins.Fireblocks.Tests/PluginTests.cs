@@ -17,7 +17,7 @@ public class PluginTests
         Assert.Equal(typeof(Plugin).Assembly.GetName().Name, plugin.Identifier);
         Assert.Equal("BTCPay Server Fireblocks", plugin.Name);
         Assert.Equal(new Version(0, 1, 0), plugin.Version);
-        Assert.Contains("No payment processing is implemented", plugin.Description);
+        Assert.Contains("hosted payment links", plugin.Description);
         var dependency = Assert.Single(plugin.Dependencies);
         Assert.Equal("BTCPayServer", dependency.Identifier);
         Assert.Equal(">=2.4.7 && <2.5.0", dependency.Condition);
@@ -36,16 +36,18 @@ public class PluginTests
     }
 
     [Fact]
-    public void ExecuteLeavesExistingServicesUnchanged()
+    public void ExecuteRegistersRealPaymentHandlerAndCheckoutExtension()
     {
         var services = new ServiceCollection();
         services.AddSingleton(new object());
-        var before = services.ToArray();
 
         new Plugin().Execute(services);
-        new Plugin().Execute(services);
 
-        Assert.Equal(before, services.ToArray());
+        Assert.Contains(services, d => d.ServiceType == typeof(object));
+        Assert.Single(services, d => d.ServiceType == typeof(BTCPayServer.Payments.IPaymentMethodHandler) &&
+            d.ImplementationType == typeof(BTCPayServer.Plugins.Fireblocks.Payments.FireblocksPaymentMethodHandler));
+        Assert.Single(services, d => d.ServiceType == typeof(BTCPayServer.Payments.ICheckoutModelExtension) &&
+            d.ImplementationType == typeof(BTCPayServer.Plugins.Fireblocks.Payments.FireblocksCheckoutModelExtension));
         Assert.Same(services, services.AddFireblocksPaymentMethod());
     }
 }
