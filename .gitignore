@@ -16,6 +16,10 @@
 # Mono auto generated files
 mono_crash.*
 
+# Nix build outputs
+/result
+/result-*
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/

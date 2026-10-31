@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "btcpayserver": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1793281174,
+        "narHash": "sha256-8yVWNpxwXE4yDBX0aN2OgJkrJGBfKgj75pFletRtL7E=",
+        "owner": "btcpayserver",
+        "repo": "btcpayserver",
+        "rev": "2868deedd9d911b715fec7306ea9cada36d86bff",
+        "type": "github"
+      },
+      "original": {
+        "owner": "btcpayserver",
+        "repo": "btcpayserver",
+        "rev": "2868deedd9d911b715fec7306ea9cada36d86bff",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1793341285,
+        "narHash": "sha256-Y1CiZ4SoBUjLQyQM/pY+rS2dXD3CHLPstF0lmOc73D4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1c89083e451e891152365b799595cf7790a43325",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1c89083e451e891152365b799595cf7790a43325",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "btcpayserver": "btcpayserver",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

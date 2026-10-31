@@ -26,6 +26,43 @@ contains metadata/discovery and no-op registration tests. The solution builds th
 it does not run the host's database/browser integration suites. CI runs the Release build, these same
 plugin tests, and the package verifier via `bash scripts/ci.sh`.
 
+## Nix development and package
+
+On Linux with Nix flakes enabled, enter the reproducible development shell:
+
+```bash
+nix develop
+dotnet --version # 10.0.403
+```
+
+The shell provides the pinned .NET SDK, Git, and Python 3. Initialize the BTCPay submodule as above
+for normal `dotnet` commands; the plain workflow remains fully supported and does not require Nix.
+The development shell does not replace Docker for the optional regtest harness.
+
+Build the plugin package and run the same package build through the flake checks:
+
+```bash
+nix build
+nix flake check
+```
+
+`nix build` does not require an initialized submodule: the flake independently pins the same BTCPay
+v2.4.7 source revision. The `result` symlink contains the framework-dependent publish output at
+`result/share/btcpayserver/Plugins/BTCPayServer.Plugins.Fireblocks/`, ready to mount or copy into a
+BTCPay plugins directory. This is the plugin-directory package intended for future NixOS modules,
+not the `.btcpay` release archive produced by `scripts/ci.sh`.
+
+NuGet dependencies are locked in `nix/deps.json`. After changing project or BTCPay dependencies,
+regenerate the lock with the package's fetch-deps helper and commit the result:
+
+```bash
+nix build .#fetch-deps
+./result nix/deps.json
+```
+
+The `nixpkgs` lock also pins SDK 10.0.403. When upgrading BTCPay, update its source input together
+with the Git submodule and the other compatibility pins described below.
+
 ## Upstream and compatibility
 
 Adapted from the [official plugin template](https://github.com/btcpayserver/btcpayserver-plugin-template)
@@ -161,7 +198,8 @@ Plugins run with the host's privileges: use a disposable development instance, n
 ## CI and release packages
 
 `.github/workflows/ci.yml` runs on every pull request, pushes to `master` (the default branch),
-`v*` tag pushes, and manual dispatch. Actions are SHA-pinned. Only the tag publication job gets
+`v*` tag pushes, and manual dispatch. The `nix-flake` job runs `nix flake check`, including the
+Nix package build. Actions are SHA-pinned. Only the tag publication job gets
 `contents: write`; all builds use `contents: read` and checkout does not persist credentials.
 NuGet downloads are cached; build outputs are deliberately rebuilt rather than restored from cache.
 Build and publish use `ContinuousIntegrationBuild` and the same pinned source and SDK.
@@ -181,8 +219,8 @@ bit-for-bit reproducibility across different operating systems or dependency fee
 
 Download `fireblocks-plugin` from a workflow run's **Artifacts** section (including PR builds);
 GitHub wraps the package files in an outer ZIP. Test results are uploaded separately.
-For a release, update the project `<Version>` and the version assertion in `PluginTests.cs`
-(the plugin reads its version from assembly metadata), merge the reviewed change, then push a
+For a release, update the project `<Version>`, `version` in `flake.nix`, and the version assertion
+in `PluginTests.cs` (the plugin reads its version from assembly metadata), merge the reviewed change, then push a
 matching tag such as `v0.1.0`. Mismatched tags fail before building.
 After the full gate passes, the tag workflow creates a GitHub release and attaches the `.btcpay`,
 `.btcpay.json`, and checksums. Rerunning a tag build replaces that release's assets.
