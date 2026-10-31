@@ -7,8 +7,8 @@ There are no provider credentials, API clients, or provider configuration in thi
 
 - .NET SDK **10.0.403** (exact version pinned in `global.json`), Git with submodule support.
 - Python 3 for package verification and archive normalization.
-- NuGet access for restore. Docker Compose is needed only to run the local BTCPay dependencies,
-  not for the scaffold's unit tests.
+- NuGet access for restore. Docker with Compose is needed for the local BTCPay/regtest harness
+  and for running the CI gate in containers; it is not needed for host-installed .NET unit tests.
 
 ## Checkout, build, test
 
@@ -45,6 +45,74 @@ The deliberate build pairing is **BTCPay v2.4.7 ↔ .NET SDK 10.0.403**, matchin
 that release's `Dockerfile` and its `net10.0` target. `global.json` disables SDK roll-forward.
 When upgrading, update the submodule pin, `global.json` (from the new host Dockerfile), dependency
 condition, and tests together; validate the packaged plugin on the new host.
+
+## Local BTCPay + regtest harness
+
+From a clean checkout, one command initializes the pinned submodule, builds the Release plugin,
+starts BTCPay Server, PostgreSQL, NBXplorer, and Bitcoin Core in regtest, and seeds a store:
+
+```bash
+./dev/up.sh
+```
+
+Open **http://localhost:14142** and sign in with the development-only credentials
+`dev@fireblocks.local` / `DevPassword123!`. The seeded store is **Fireblocks Dev**. These
+credentials and the database are local/disposable; never reuse them or this stack for real funds.
+Only loopback port `14142` is published. Named volumes retain BTCPay, PostgreSQL, NBXplorer, and
+regtest chain data between restarts.
+
+The build container uses the same **.NET SDK 10.0.403** and **BTCPay v2.4.7** source pin as CI.
+It publishes to `artifacts/dev-plugin`, which is mounted read-only at
+`/datadir/Plugins/BTCPayServer.Plugins.Fireblocks` in the BTCPay container. Confirm startup by
+looking for `Running plugin BTCPayServer.Plugins.Fireblocks - 0.1.0` in the logs or by opening
+**Server Settings → Plugins**. The plugin remains an inert scaffold: it has no Fireblocks checkout
+payment method or provider configuration yet.
+
+### Develop, restart, and inspect
+
+After changing plugin source, rerun `./dev/up.sh`. It rebuilds changed layers, republishes the
+plugin, recreates BTCPay so the new assembly loads, and safely reuses the existing admin/store.
+Then inspect logs and exercise the baseline checkout UI:
+
+```bash
+# Create an invoice through the local Greenfield API and print its checkout URL.
+python3 dev/create-invoice.py
+# Optional amount/currency:
+python3 dev/create-invoice.py --amount 25 --currency USD
+
+# Inspect plugin loading and application errors.
+docker compose -f dev/docker-compose.yml logs -f btcpay
+# Inspect the regtest node or database when diagnosing dependencies.
+docker compose -f dev/docker-compose.yml logs -f bitcoind postgres nbxplorer
+```
+
+Open the printed checkout URL, or sign in and use **Stores → Fireblocks Dev → Invoices → Create
+Invoice**. Seeding also configures a fixed **watch-only regtest BTC wallet** (no private keys are
+saved), so checkout has an on-chain payment method. The well-known development mnemonic is public
+and must never hold real funds. The helper uses only Python's standard library. Override
+`BTCPAY_DEV_URL`, `BTCPAY_DEV_EMAIL`, `BTCPAY_DEV_PASSWORD`, or `BTCPAY_DEV_STORE_NAME` when needed;
+`BTCPAY_DEV_STARTUP_TIMEOUT` controls the readiness wait in seconds (default 300).
+
+Stop the stack while retaining data, or delete all local harness data and start fresh:
+
+```bash
+docker compose -f dev/docker-compose.yml down
+docker compose -f dev/docker-compose.yml down --volumes
+```
+
+### Run the CI gate in the harness
+
+Use the following command to run the exact Release build, plugin tests, package checks, and
+`scripts/ci.sh` gate in the pinned SDK container rather than relying on a host .NET installation:
+
+```bash
+./dev/ci.sh
+```
+
+The working tree and a persistent NuGet cache are mounted into that container. CI currently has
+no separate lint step; the command above is the complete CI test subset. Python helpers can be
+syntax-checked with `python3 -m compileall dev`, and Compose configuration with
+`docker compose -f dev/docker-compose.yml config --quiet`.
 
 ## Run against the local BTCPay checkout
 
