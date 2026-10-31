@@ -5,7 +5,8 @@ There are no provider credentials, API clients, or provider configuration in thi
 
 ## Prerequisites
 
-- .NET SDK **10.0.401 or later in the 10.0 line**, Git with submodule support.
+- .NET SDK **10.0.403** (exact version pinned in `global.json`), Git with submodule support.
+- Python 3 for package verification and archive normalization.
 - NuGet access for restore. Docker Compose is needed only to run the local BTCPay dependencies,
   not for the scaffold's unit tests.
 
@@ -22,7 +23,8 @@ dotnet test
 
 `src/BTCPayServer.Plugins.Fireblocks` contains the plugin; `tests/BTCPayServer.Plugins.Fireblocks.Tests`
 contains metadata/discovery and no-op registration tests. The solution builds the referenced host;
-it does not run the host's database/browser integration suites. This repository has no CI workflow yet.
+it does not run the host's database/browser integration suites. CI runs the Release build, these same
+plugin tests, and the package verifier via `bash scripts/ci.sh`.
 
 ## Upstream and compatibility
 
@@ -39,7 +41,10 @@ The BTCPay dependency is therefore pinned by the gitlink at `submodules/btcpayse
 **v2.4.7**, commit `2868deedd9d911b715fec7306ea9cada36d86bff`.
 Do not replace this with an unversioned checkout or an invented package reference.
 The runtime dependency is `>=2.4.7 && <2.5.0`; earlier 2.4 patches and 2.5+ are not declared supported.
-When upgrading, update the submodule pin, dependency condition, and tests together.
+The deliberate build pairing is **BTCPay v2.4.7 ↔ .NET SDK 10.0.403**, matching the SDK image in
+that release's `Dockerfile` and its `net10.0` target. `global.json` disables SDK roll-forward.
+When upgrading, update the submodule pin, `global.json` (from the new host Dockerfile), dependency
+condition, and tests together; validate the packaged plugin on the new host.
 
 ## Run against the local BTCPay checkout
 
@@ -77,6 +82,39 @@ Use the configured data directory (it varies by OS/network/container); the plugi
 assembly filename, and metadata identifier must match. Do not install this copy and a `DEBUG_PLUGINS`
 copy simultaneously. Host assemblies are intentionally excluded from the published plugin.
 Plugins run with the host's privileges: use a disposable development instance, not production funds.
+
+## CI and release packages
+
+`.github/workflows/ci.yml` runs on every pull request, pushes to `master` (the default branch),
+`v*` tag pushes, and manual dispatch. Actions are SHA-pinned. Only the tag publication job gets
+`contents: write`; all builds use `contents: read` and checkout does not persist credentials.
+NuGet downloads are cached; build outputs are deliberately rebuilt rather than restored from cache.
+Build and publish use `ContinuousIntegrationBuild` and the same pinned source and SDK.
+
+Run the exact CI gate locally:
+
+```bash
+bash scripts/ci.sh
+```
+
+The pinned host's **PluginPacker** produces an installable `.btcpay` archive and `.btcpay.json`
+metadata under `artifacts/package/BTCPayServer.Plugins.Fireblocks/<version>/`, alongside `SHA256SUMS`.
+The verifier preserves **all** published files (including future content assets), rejects bundled
+host assemblies, normalizes ZIP entry order/timestamps/permissions, and regenerates checksums.
+This makes archive construction repeatable for identical publish output; it is not a claim of
+bit-for-bit reproducibility across different operating systems or dependency feeds.
+
+Download `fireblocks-plugin` from a workflow run's **Artifacts** section (including PR builds);
+GitHub wraps the package files in an outer ZIP. Test results are uploaded separately.
+For a release, update the project `<Version>` and `Plugin.Version` together, merge the reviewed
+change, then push a matching tag such as `v0.1.0`. Mismatched tags fail before building.
+After the full gate passes, the tag workflow creates a GitHub release and attaches the `.btcpay`,
+`.btcpay.json`, and checksums. Rerunning a tag build replaces that release's assets.
+
+Verify downloads with `sha256sum --check SHA256SUMS`. Install the `.btcpay` file via a compatible
+BTCPay instance's **Server Settings → Plugins → Upload Plugin** and restart when prompted.
+The metadata and checksums are companion files, not separate plugins. Packages remain a scaffold;
+release automation does not make payment processing available.
 
 ## Future payment-method seam
 
