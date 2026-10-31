@@ -72,9 +72,7 @@ public sealed partial class FlowApiClient(
 
         if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
         {
-            // Redact before taking any excerpt so truncation cannot leave a
-            // recognizable credential prefix behind.
-            var detail = ReadProviderError(Redact(body, config.ApiCredential));
+            var detail = ReadProviderError(body, config.ApiCredential);
             var uncertain = (int)statusCode >= 500;
             throw new FlowApiException(
                 Redact($"Flow provider returned HTTP {(int)statusCode}{detail}.", config.ApiCredential),
@@ -113,27 +111,31 @@ public sealed partial class FlowApiClient(
         }
     }
 
-    private static string ReadProviderError(string body)
+    private static string ReadProviderError(string body, string credential)
     {
         try
         {
+            // Parse the complete bounded response before truncating anything. JSON
+            // unescaping can otherwise recover a credential from an invalid excerpt.
             using var json = JsonDocument.Parse(body);
             if (json.RootElement.ValueKind != JsonValueKind.Object)
-                return string.Empty;
+                return " (unrecognized provider error response)";
             var code = json.RootElement.TryGetProperty("code", out var codeElement) &&
                 codeElement.ValueKind == JsonValueKind.String ? codeElement.GetString() : null;
             var error = json.RootElement.TryGetProperty("error", out var errorElement) &&
                 errorElement.ValueKind == JsonValueKind.String ? errorElement.GetString() : null;
+            code = Redact(code, credential);
+            error = Redact(error, credential);
             if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(error))
                 return $" ({string.Join(": ", new[] { code, error }.Where(v => !string.IsNullOrWhiteSpace(v)))})";
         }
         catch (JsonException)
         {
-            // A short, redacted excerpt is more useful than a secondary parse error.
+            // Never echo malformed/non-JSON responses: no truncation or encoding
+            // strategy can make arbitrary provider bytes safe for logs.
         }
 
-        var excerpt = body.Length <= 256 ? body : body[..256];
-        return string.IsNullOrWhiteSpace(excerpt) ? string.Empty : $" ({excerpt})";
+        return " (unrecognized provider error response)";
     }
 
     private static bool ContainsCredential(string? value, string credential)

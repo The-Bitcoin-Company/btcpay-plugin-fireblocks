@@ -227,7 +227,7 @@ public class FlowApiClientTests
     }
 
     [Fact]
-    public async Task NonJsonErrorIsRedactedBeforeTruncation()
+    public async Task NonJsonErrorNeverEchoesResponseBody()
     {
         var body = new string('x', 242) + TestData.Credential + new string('y', 300);
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
@@ -242,6 +242,25 @@ public class FlowApiClientTests
 
         Assert.DoesNotContain(TestData.Credential, exception.Message);
         Assert.DoesNotContain(TestData.Credential[..14], exception.Message);
+        Assert.Contains("unrecognized provider error response", exception.Message);
+    }
+
+    [Fact]
+    public async Task LongJsonErrorIsParsedAndRedactedBeforeAnyTruncation()
+    {
+        var body = $$"""{"error":"bad \u0074est-flow-secret","padding":"{{new string('x', 600)}}"}""";
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json(body)
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+        Assert.DoesNotContain("\\u0074est-flow-secret", exception.Message);
         Assert.Contains("[redacted]", exception.Message);
     }
 
