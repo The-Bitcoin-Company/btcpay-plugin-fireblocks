@@ -25,6 +25,7 @@ public class FireblocksCheckoutModelExtensionTests
         Assert.Equal(details.PaymentUrl, model.Address);
         Assert.Equal(details.PaymentUrl, model.InvoiceBitcoinUrl);
         Assert.Equal(details.PaymentUrl, model.AdditionalData["fireblocksPaymentUrl"]?.Value<string>());
+        Assert.Equal(details.ExpiresAt, model.AdditionalData["fireblocksExpiresAt"]?.Value<long>());
         Assert.Equal(InvoiceStatus.New, context.InvoiceEntity.Status);
         Assert.Equal(InvoiceExceptionStatus.None, context.InvoiceEntity.ExceptionStatus);
         Assert.Equal("New", model.Status);

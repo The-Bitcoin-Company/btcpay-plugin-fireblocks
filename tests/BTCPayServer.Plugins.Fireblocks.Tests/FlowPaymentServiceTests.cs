@@ -104,39 +104,20 @@ public class FlowPaymentServiceTests
         Assert.Equal(2, client.Requests.Count);
     }
 
-    [Fact]
-    public async Task EarlierProviderExpiryAllowsSafeRenewal()
+    [Theory]
+    [InlineData(5)]
+    [InlineData(30)]
+    public async Task CreatedAttemptIsNeverRenewedByDeadlinesWithoutTerminalReconciliation(int providerMinutes)
     {
         var factory = TestDbContextFactory.Create();
         var client = new FakeFlowApiClient();
-        client.Returns(new FlowPaymentLink("flow-first", "https://pay.dynamic.test/first", Now.AddMinutes(5)));
-        client.Returns(new FlowPaymentLink("flow-second", "https://pay.dynamic.test/second", Now.AddMinutes(20)));
+        client.Returns(new FlowPaymentLink("flow-first", "https://pay.dynamic.test/first", Now.AddMinutes(providerMinutes)));
         var time = new FakeTimeProvider(Now);
         var service = CreateService(factory, client, time);
 
         var first = await service.CreateOrGetPaymentLinkAsync(
             "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
-        time.Advance(TimeSpan.FromMinutes(6));
-        var second = await service.CreateOrGetPaymentLinkAsync(
-            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
-
-        Assert.NotEqual(first.Id, second.Id);
-        Assert.Equal("flow-second", second.FlowId);
-        Assert.Equal(2, client.Requests.Count);
-    }
-
-    [Fact]
-    public async Task LaterProviderExpiryPreventsDuplicateEvenAfterLocalDeadline()
-    {
-        var factory = TestDbContextFactory.Create();
-        var client = new FakeFlowApiClient();
-        client.Returns(new FlowPaymentLink("flow-first", "https://pay.dynamic.test/first", Now.AddMinutes(30)));
-        var time = new FakeTimeProvider(Now);
-        var service = CreateService(factory, client, time);
-
-        var first = await service.CreateOrGetPaymentLinkAsync(
-            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
-        time.Advance(TimeSpan.FromMinutes(16));
+        time.Advance(TimeSpan.FromDays(2));
         var second = await service.CreateOrGetPaymentLinkAsync(
             "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
 

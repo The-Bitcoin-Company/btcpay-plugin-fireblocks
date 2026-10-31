@@ -28,14 +28,18 @@ public static class FireblocksServiceCollectionExtensions
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.MaxResponseContentBufferSize = 1024 * 1024;
         }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
-        services.TryAddSingleton<IFlowApiClient>(provider => new FlowApiClient(
-            provider.GetRequiredService<IHttpClientFactory>().CreateClient(
-                FlowEndpointSecurity.AllowLocalEndpoints(provider.GetRequiredService<IConfiguration>())
-                    ? LocalFlowHttpClient
-                    : FlowHttpClient)));
+        services.TryAddSingleton<IFlowApiClient>(provider =>
+        {
+            var allowLocal = FlowEndpointSecurity.AllowLocalEndpoints(provider.GetRequiredService<IConfiguration>());
+            return new FlowApiClient(
+                provider.GetRequiredService<IHttpClientFactory>().CreateClient(
+                    allowLocal ? LocalFlowHttpClient : FlowHttpClient),
+                allowLocalEndpoints: allowLocal);
+        });
         services.TryAddSingleton<IFlowPaymentAttemptRepository, FlowPaymentAttemptRepository>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IFlowPaymentService, FlowPaymentService>();
+        services.TryAddSingleton<IFlowInvoiceExpiryService, FlowInvoiceExpiryService>();
         services.TryAddSingleton<FireblocksPaymentMethodHandler>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPaymentMethodHandler, FireblocksPaymentMethodHandler>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICheckoutModelExtension, FireblocksCheckoutModelExtension>());

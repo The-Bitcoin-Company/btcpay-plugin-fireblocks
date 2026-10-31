@@ -44,7 +44,7 @@ public sealed class FlowPaymentService(
         {
             var now = timeProvider.GetUtcNow();
             var previous = await repository.GetLatestAsync(storeId, invoiceId, cancellationToken);
-            if (previous is { State: FlowAttemptState.Created } && CanReuse(previous, now))
+            if (previous is { State: FlowAttemptState.Created })
                 return previous;
             if (previous is { State: FlowAttemptState.Creating or FlowAttemptState.Uncertain })
                 throw new FlowPaymentCreationException(
@@ -131,15 +131,4 @@ public sealed class FlowPaymentService(
         }
     }
 
-    private static bool CanReuse(FlowPaymentAttempt attempt, DateTimeOffset now)
-    {
-        var localActive = attempt.ExpiresAt > now;
-        var providerActive = attempt.ProviderExpiresAt > now;
-        // Never create a replacement while a confirmed provider link is still active.
-        // An earlier provider expiry, however, makes renewal safe even if our local
-        // requested deadline has not elapsed yet.
-        return localActive
-            ? attempt.ProviderExpiresAt is null || providerActive
-            : providerActive;
-    }
 }

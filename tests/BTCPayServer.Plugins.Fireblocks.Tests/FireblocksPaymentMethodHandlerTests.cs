@@ -19,7 +19,9 @@ public class FireblocksPaymentMethodHandlerTests
         var config = TestData.Config();
         config.PaymentExpiryMinutes = 1;
         var service = new StubFlowPaymentService(now);
-        var handler = new FireblocksPaymentMethodHandler(service, timeProvider: new FakeTimeProvider(now));
+        var expiryService = new FakeInvoiceExpiryService();
+        var handler = new FireblocksPaymentMethodHandler(
+            service, timeProvider: new FakeTimeProvider(now), invoiceExpiryService: expiryService);
         var invoice = new InvoiceEntity
         {
             Id = "invoice",
@@ -43,10 +45,25 @@ public class FireblocksPaymentMethodHandlerTests
         await handler.ConfigurePrompt(context);
 
         Assert.Equal(now.AddMinutes(1), invoice.ExpirationTime);
+        Assert.Equal(now.AddMinutes(1), expiryService.Deadline);
+        Assert.Equal(invoice.Id, expiryService.InvoiceId);
         Assert.Equal(now.AddMinutes(1), service.InvoiceExpiresAt);
         var details = handler.ParsePaymentPromptDetails(context.Prompt.Details);
         Assert.Equal(25m, details.RequestedUsd);
         Assert.Equal(invoice.ExpirationTime.ToUnixTimeSeconds(), details.ExpiresAt);
+    }
+
+    private sealed class FakeInvoiceExpiryService : IFlowInvoiceExpiryService
+    {
+        public string? InvoiceId { get; private set; }
+        public DateTimeOffset? Deadline { get; private set; }
+
+        public Task ShortenAsync(string invoiceId, DateTimeOffset deadline)
+        {
+            InvoiceId = invoiceId;
+            Deadline = deadline;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubFlowPaymentService(DateTimeOffset now) : IFlowPaymentService

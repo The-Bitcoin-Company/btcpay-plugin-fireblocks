@@ -94,8 +94,8 @@ starts BTCPay Server, PostgreSQL, NBXplorer, and Bitcoin Core in regtest, and se
 Open **http://localhost:14142** and sign in with the development-only credentials
 `dev@fireblocks.local` / `DevPassword123!`. The seeded store is **Fireblocks Dev**. These
 credentials and the database are local/disposable; never reuse them or this stack for real funds.
-Only loopback port `14142` is published. Named volumes retain BTCPay, PostgreSQL, NBXplorer, and
-regtest chain data between restarts.
+Only loopback ports `14142` (BTCPay) and `14143` (the fake hosted Flow page) are published.
+Named volumes retain BTCPay, PostgreSQL, NBXplorer, and regtest chain data between restarts.
 
 The build container uses the same **.NET SDK 10.0.403** and **BTCPay v2.4.7** source pin as CI.
 It publishes to `artifacts/dev-plugin`, which is mounted read-only at
@@ -245,21 +245,24 @@ endpoint for `FIREBLOCKS-FLOW`:
 - **Solana USDC destination address**, a valid base58 address. The request has exactly one settlement
   (Solana mainnet chain `SOL`/`101`, USDC mint
   `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, six decimals) and one matching destination.
-- **Maximum payment lifetime in minutes**. At prompt creation the plugin sets the BTCPay invoice
-  expiration to the earlier of its existing expiration and this policy deadline. This keeps checkout
-  and the Flow link on the same local lifetime, but can also shorten other payment methods on that
-  invoice; it never extends the invoice's lifetime.
+- **Maximum payment lifetime in minutes**. During initial or lazy prompt creation the plugin sets the
+  BTCPay invoice expiration to the earlier of its existing expiration and this policy deadline, using
+  BTCPay's invoice-expiry API for an already-persisted invoice. This keeps checkout and the Flow link on
+  the same local lifetime, but can also shorten other payment methods on that invoice; it never extends
+  the invoice's lifetime. Open checkout also hides the link when its effective local/provider deadline
+  passes, even if no status update arrives.
 
 Only fixed-amount **USD** invoices are supported. Requests use payment mode with `currency: "USD"`;
 the requested USD value is persisted separately from any eventual token settlement amount. Every
 attempt stores its immutable creation JSON, monotonic attempt number, invoice/attempt correlation,
 provider endpoint/environment (never the credential), Flow ID, hosted URL, requested USD amount, and
 local/provider expiries in the plugin's PostgreSQL schema. A unique invoice/attempt-number constraint
-prevents concurrent processes from issuing duplicate creation calls. Definite failures and attempts
-whose local and provider expiries have both passed can be renewed without deleting history.
-A timeout, transport failure, 5xx response, or ambiguous success is recorded as uncertain and is never
-retried merely because time passed. Such an attempt requires explicit provider/operator reconciliation
-(outside this release) before another Flow should be created for that invoice.
+prevents concurrent processes from issuing duplicate creation calls. Only definite pre-creation
+rejections can produce another attempt in this release, and failed-attempt history is preserved.
+Created links are never replaced merely because local or provider deadlines pass: the payer may already
+have broadcast a payment. Creating, uncertain, and created attempts therefore require explicit
+terminal-state reconciliation (outside this release) before another Flow should be created for that
+invoice. Checkout suppresses an expired or amount-mismatched link instead of renewing it unsafely.
 
 The checkout displays only the hosted URL and public attempt metadata. Expired links, and links whose
 fixed amount no longer matches the invoice balance after another payment method is used, are suppressed

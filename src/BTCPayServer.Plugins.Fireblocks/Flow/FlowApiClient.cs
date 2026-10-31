@@ -28,10 +28,14 @@ public class FlowApiException : Exception
     public HttpStatusCode? StatusCode { get; }
 }
 
-public sealed partial class FlowApiClient(HttpClient httpClient, TimeSpan? timeout = null) : IFlowApiClient
+public sealed partial class FlowApiClient(
+    HttpClient httpClient,
+    TimeSpan? timeout = null,
+    bool allowLocalEndpoints = false) : IFlowApiClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromSeconds(15);
+    private readonly bool _allowLocalEndpoints = allowLocalEndpoints;
 
     public async Task<FlowPaymentLink> CreatePaymentLinkAsync(
         FireblocksStoreConfig config,
@@ -87,10 +91,18 @@ public sealed partial class FlowApiClient(HttpClient httpClient, TimeSpan? timeo
         try
         {
             var result = JsonSerializer.Deserialize<FlowPaymentLinkResponse>(body, JsonOptions);
+            if (ContainsCredential(result?.Flow?.Id, config.ApiCredential) ||
+                ContainsCredential(result?.PaymentUrl, config.ApiCredential))
+                throw new FlowApiException(
+                    "Flow provider response contained credential material. It was rejected and will not be persisted. The creation outcome is uncertain.",
+                    true);
             if (result?.Flow?.Id is not { Length: > 0 } flowId ||
                 !Uri.TryCreate(result.PaymentUrl, UriKind.Absolute, out var paymentUrl) ||
                 (paymentUrl.Scheme != Uri.UriSchemeHttps && paymentUrl.Scheme != Uri.UriSchemeHttp))
                 throw new FlowApiException("Flow provider returned an incomplete payment-link response. The creation outcome is uncertain.", true);
+            if (paymentUrl.Scheme == Uri.UriSchemeHttp &&
+                (!_allowLocalEndpoints || (!paymentUrl.IsLoopback && !string.Equals(paymentUrl.Host, "flow-fake", StringComparison.OrdinalIgnoreCase))))
+                throw new FlowApiException("Flow provider returned a non-HTTPS payment link outside local-fake mode. The creation outcome is uncertain.", true);
             if (result.Flow.Mode is not null && result.Flow.Mode != "payment")
                 throw new FlowApiException("Flow provider returned a flow that is not in payment mode. The creation outcome is uncertain.", true);
             return new FlowPaymentLink(flowId, paymentUrl.AbsoluteUri, result.Flow.ExpiresAt);
@@ -122,6 +134,14 @@ public sealed partial class FlowApiClient(HttpClient httpClient, TimeSpan? timeo
 
         var excerpt = body.Length <= 256 ? body : body[..256];
         return string.IsNullOrWhiteSpace(excerpt) ? string.Empty : $" ({excerpt})";
+    }
+
+    private static bool ContainsCredential(string? value, string credential)
+    {
+        if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(credential))
+            return false;
+        return value.Contains(credential, StringComparison.Ordinal) ||
+            value.Contains(Uri.EscapeDataString(credential), StringComparison.OrdinalIgnoreCase);
     }
 
     public static string Redact(string? value, string credential)

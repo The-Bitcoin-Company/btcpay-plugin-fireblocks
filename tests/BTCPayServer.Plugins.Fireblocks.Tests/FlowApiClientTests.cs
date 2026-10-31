@@ -124,6 +124,74 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task JsonEscapedCredentialInSuccessfulUrlIsRejected()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"https://pay.dynamic.test/?token=\u0074est-flow-secret"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.True(exception.Uncertain);
+        Assert.Contains("credential material", exception.Message);
+    }
+
+    [Fact]
+    public async Task UriEncodedCredentialInSuccessfulUrlIsRejected()
+    {
+        var config = TestData.Config();
+        config.ApiCredential = "test flow/secret";
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"https://pay.dynamic.test/?token=test%20flow%2Fsecret"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(config, Request()));
+
+        Assert.True(exception.Uncertain);
+        Assert.Contains("credential material", exception.Message);
+    }
+
+    [Fact]
+    public async Task ProductionRejectsInsecureReturnedPaymentUrl()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"http://pay.example/charge"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.True(exception.Uncertain);
+        Assert.Contains("non-HTTPS", exception.Message);
+    }
+
+    [Fact]
+    public async Task LocalFakeModeAcceptsLoopbackReturnedPaymentUrl()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"http://localhost:14143/pay?flow=abc"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient, allowLocalEndpoints: true);
+
+        var link = await client.CreatePaymentLinkAsync(TestData.Config(), Request());
+
+        Assert.Equal("http://localhost:14143/pay?flow=abc", link.PaymentUrl);
+    }
+
+    [Fact]
     public async Task NonJsonErrorIsRedactedBeforeTruncation()
     {
         var body = new string('x', 242) + TestData.Credential + new string('y', 300);

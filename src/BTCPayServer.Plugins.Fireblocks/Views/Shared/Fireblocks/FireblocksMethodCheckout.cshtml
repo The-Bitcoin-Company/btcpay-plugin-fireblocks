@@ -6,16 +6,16 @@
         <p class="text-muted">
             Pay this USD invoice through Fireblocks Flow. The merchant receives USDC on Solana.
         </p>
-        <a v-if="model.fireblocksPaymentUrl" class="btn btn-primary rounded-pill w-100 mt-3" id="PayWithFireblocksFlow"
-           :href="model.fireblocksPaymentUrl" target="_blank" rel="noopener noreferrer">
+        <a v-if="flowPaymentUrl" class="btn btn-primary rounded-pill w-100 mt-3" id="PayWithFireblocksFlow"
+           :href="flowPaymentUrl" target="_blank" rel="noopener noreferrer">
             Open hosted Flow payment
         </a>
         <p v-else class="alert alert-warning mt-3">
-            This Flow link is no longer valid for the invoice. Reactivate this payment method to request a new attempt.
+            This Flow link is no longer valid for the invoice. Do not pay an outdated link; a new attempt requires verified terminal-state reconciliation.
         </p>
-        <div class="input-group mt-3" v-if="model.fireblocksPaymentUrl">
+        <div class="input-group mt-3" v-if="flowPaymentUrl">
             <div class="form-floating">
-                <vc:truncate-center text="model.fireblocksPaymentUrl" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
+                <vc:truncate-center text="flowPaymentUrl" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />
                 <label>Hosted payment link</label>
             </div>
         </div>
@@ -28,6 +28,27 @@
 <script>
     Vue.component(@Safe.Json(FireblocksCheckoutModelExtension.CheckoutBodyComponentName), {
         props: ['model'],
-        template: @Safe.Json("#" + FireblocksCheckoutModelExtension.CheckoutBodyComponentName)
+        template: @Safe.Json("#" + FireblocksCheckoutModelExtension.CheckoutBodyComponentName),
+        data () {
+            return { flowExpired: false, flowExpiryTimer: null };
+        },
+        computed: {
+            flowPaymentUrl () {
+                return this.flowExpired ? null : this.model.fireblocksPaymentUrl;
+            }
+        },
+        methods: {
+            updateFlowExpiry () {
+                const deadline = Number(this.model.fireblocksExpiresAt || 0) * 1000;
+                this.flowExpired = deadline > 0 && Date.now() >= deadline;
+            }
+        },
+        mounted () {
+            this.updateFlowExpiry();
+            this.flowExpiryTimer = setInterval(this.updateFlowExpiry, 1000);
+        },
+        beforeDestroy () {
+            clearInterval(this.flowExpiryTimer);
+        }
     });
 </script>

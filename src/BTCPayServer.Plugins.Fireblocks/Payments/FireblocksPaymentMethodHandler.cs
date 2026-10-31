@@ -23,7 +23,8 @@ public sealed class FireblocksPaymentDetails;
 public sealed class FireblocksPaymentMethodHandler(
     IFlowPaymentService paymentService,
     IConfiguration? configuration = null,
-    TimeProvider? timeProvider = null) : IPaymentMethodHandler
+    TimeProvider? timeProvider = null,
+    IFlowInvoiceExpiryService? invoiceExpiryService = null) : IPaymentMethodHandler
 {
     private readonly bool _allowLocalEndpoints = FlowEndpointSecurity.AllowLocalEndpoints(configuration);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -63,7 +64,11 @@ public sealed class FireblocksPaymentMethodHandler(
         {
             var policyExpiresAt = _timeProvider.GetUtcNow().AddMinutes(config.PaymentExpiryMinutes);
             if (context.InvoiceEntity.ExpirationTime > policyExpiresAt)
+            {
                 context.InvoiceEntity.ExpirationTime = policyExpiresAt;
+                if (invoiceExpiryService is not null)
+                    await invoiceExpiryService.ShortenAsync(context.InvoiceEntity.Id, policyExpiresAt);
+            }
 
             var attempt = await paymentService.CreateOrGetPaymentLinkAsync(
                 context.Store.Id,

@@ -20,7 +20,11 @@ public sealed class FireblocksCheckoutModelExtension(TimeProvider? timeProvider 
         context.Model.CheckoutBodyComponentName = CheckoutBodyComponentName;
         context.Model.AdditionalData["fireblocksPaymentAttemptId"] = new JValue(details.AttemptId);
         var now = _timeProvider.GetUtcNow().ToUnixTimeSeconds();
-        var expired = details.ExpiresAt <= now || details.ProviderExpiresAt <= now;
+        var effectiveExpiresAt = details.ProviderExpiresAt is long providerExpiry && providerExpiry < details.ExpiresAt
+            ? providerExpiry
+            : details.ExpiresAt;
+        context.Model.AdditionalData["fireblocksExpiresAt"] = new JValue(effectiveExpiresAt);
+        var expired = effectiveExpiresAt <= now;
         var amountChanged = context.Prompt.Calculate().Due != details.RequestedUsd;
         if (expired || amountChanged)
         {
