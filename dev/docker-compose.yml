@@ -35,6 +35,7 @@ services:
       BTCPAY_RECOMMENDED-PLUGINS: ""
       BTCPAY_UPDATEURL: ""
       BTCPAY_VERBOSE: "true"
+      FIREBLOCKS_ENABLE_LOCAL_FLOW_FAKE: "true"
     ports:
       - 127.0.0.1:14142:8080
     volumes:

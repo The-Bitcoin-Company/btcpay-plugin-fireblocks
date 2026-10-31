@@ -6,10 +6,13 @@
         <p class="text-muted">
             Pay this USD invoice through Fireblocks Flow. The merchant receives USDC on Solana.
         </p>
-        <a class="btn btn-primary rounded-pill w-100 mt-3" id="PayWithFireblocksFlow"
+        <a v-if="model.fireblocksPaymentUrl" class="btn btn-primary rounded-pill w-100 mt-3" id="PayWithFireblocksFlow"
            :href="model.fireblocksPaymentUrl" target="_blank" rel="noopener noreferrer">
             Open hosted Flow payment
         </a>
+        <p v-else class="alert alert-warning mt-3">
+            This Flow link is no longer valid for the invoice. Reactivate this payment method to request a new attempt.
+        </p>
         <div class="input-group mt-3" v-if="model.fireblocksPaymentUrl">
             <div class="form-floating">
                 <vc:truncate-center text="model.fireblocksPaymentUrl" is-vue="true" padding="15" elastic="true" classes="form-control-plaintext" />

@@ -245,18 +245,26 @@ endpoint for `FIREBLOCKS-FLOW`:
 - **Solana USDC destination address**, a valid base58 address. The request has exactly one settlement
   (Solana mainnet chain `SOL`/`101`, USDC mint
   `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`, six decimals) and one matching destination.
-- **Maximum payment lifetime in minutes**. The Flow link expires at the earlier of this policy deadline
-  and the BTCPay invoice expiration; the plugin never extends the invoice's lifetime.
+- **Maximum payment lifetime in minutes**. At prompt creation the plugin sets the BTCPay invoice
+  expiration to the earlier of its existing expiration and this policy deadline. This keeps checkout
+  and the Flow link on the same local lifetime, but can also shorten other payment methods on that
+  invoice; it never extends the invoice's lifetime.
 
 Only fixed-amount **USD** invoices are supported. Requests use payment mode with `currency: "USD"`;
 the requested USD value is persisted separately from any eventual token settlement amount. Every
-attempt stores its immutable creation JSON, invoice/attempt correlation, Flow ID, hosted URL, requested
-USD amount, and expiry in the plugin's PostgreSQL schema. Known failures and expired attempts can be
-renewed without deleting history. A timeout, transport failure, 5xx response, or ambiguous success is
-recorded as uncertain and is not blindly retried while its original attempt is still active.
+attempt stores its immutable creation JSON, monotonic attempt number, invoice/attempt correlation,
+provider endpoint/environment (never the credential), Flow ID, hosted URL, requested USD amount, and
+local/provider expiries in the plugin's PostgreSQL schema. A unique invoice/attempt-number constraint
+prevents concurrent processes from issuing duplicate creation calls. Definite failures and attempts
+whose local and provider expiries have both passed can be renewed without deleting history.
+A timeout, transport failure, 5xx response, or ambiguous success is recorded as uncertain and is never
+retried merely because time passed. Such an attempt requires explicit provider/operator reconciliation
+(outside this release) before another Flow should be created for that invoice.
 
-The checkout displays only the hosted URL and public attempt metadata. There is no browser-return
-settlement endpoint, and opening a link does not add a BTCPay payment or change invoice state. Future
+The checkout displays only the hosted URL and public attempt metadata. Expired links, and links whose
+fixed amount no longer matches the invoice balance after another payment method is used, are suppressed
+instead of presenting a stale charge. There is no browser-return settlement endpoint, and opening a
+link does not add a BTCPay payment or change invoice state. Future
 settlement work must reconcile verified provider notifications or server-side Flow reads; it must not
 trust a browser return.
 
@@ -269,7 +277,7 @@ query the disposable database:
 
 ```bash
 docker compose -f dev/docker-compose.yml exec -T postgres psql -U postgres -d btcpayserver \
-  -c 'SELECT invoice_id, id, state, flow_id, requested_usd, expires_at FROM "Fireblocks".fireblocks_payment_attempts;'
+  -c 'SELECT invoice_id, attempt_number, state, flow_id, requested_usd, expires_at, provider_expires_at, api_endpoint, environment_id FROM "Fireblocks".fireblocks_payment_attempts;'
 ```
 
 Exercise provider rejection or a delayed response by setting the fake mode before startup:
@@ -281,8 +289,10 @@ FLOW_FAKE_MODE=timeout FLOW_FAKE_TIMEOUT_SECONDS=30 ./dev/up.sh
 
 The production API client has a 15-second timeout. After testing a failure, return to
 `FLOW_FAKE_MODE=success ./dev/up.sh`; use a new invoice for a clean successful attempt. The fake and
-its token are strictly development fixtures. Real API endpoints require HTTPS (plain HTTP is accepted
-only for the local fake), and real credentials must never be committed or pasted into documentation.
+its token are strictly development fixtures. Real API endpoints require HTTPS and use BTCPay's SSRF
+protection. Plain HTTP/private endpoints work only when the harness explicitly enables
+`FIREBLOCKS_ENABLE_LOCAL_FLOW_FAKE=true`; do not enable that escape hatch in production. Real
+credentials must never be committed or pasted into documentation.
 
 ## License
 

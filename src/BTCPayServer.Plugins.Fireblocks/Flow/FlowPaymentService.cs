@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Plugins.Fireblocks.Flow;
 
@@ -43,11 +44,11 @@ public sealed class FlowPaymentService(
         {
             var now = timeProvider.GetUtcNow();
             var previous = await repository.GetLatestAsync(storeId, invoiceId, cancellationToken);
-            if (previous is { State: FlowAttemptState.Created } && previous.ExpiresAt > now)
+            if (previous is { State: FlowAttemptState.Created } && CanReuse(previous, now))
                 return previous;
-            if (previous is { State: FlowAttemptState.Creating or FlowAttemptState.Uncertain } && previous.ExpiresAt > now)
+            if (previous is { State: FlowAttemptState.Creating or FlowAttemptState.Uncertain })
                 throw new FlowPaymentCreationException(
-                    "A previous Flow creation has an uncertain outcome. It remains recorded and will not be blindly retried.",
+                    "A previous Flow creation has an uncertain outcome. It remains recorded and will not be retried without explicit reconciliation.",
                     uncertain: true);
 
             var expiresAt = invoiceExpiresAt <= now.AddMinutes(config.PaymentExpiryMinutes)
@@ -62,8 +63,11 @@ public sealed class FlowPaymentService(
                 Id = Guid.NewGuid().ToString("N"),
                 StoreId = storeId,
                 InvoiceId = invoiceId,
+                AttemptNumber = (previous?.AttemptNumber ?? 0) + 1,
                 CreatedAt = now,
                 ExpiresAt = expiresAt,
+                ApiEndpoint = config.ApiEndpoint,
+                EnvironmentId = config.EnvironmentId,
                 RequestedUsd = requestedUsd,
                 State = FlowAttemptState.Creating,
                 CreationRequest = string.Empty
@@ -74,13 +78,34 @@ public sealed class FlowPaymentService(
 
             // Persist the immutable request before any network I/O. A crash after this
             // point leaves a Creating record, which blocks an unsafe automatic retry.
-            await repository.AddAsync(attempt, cancellationToken);
+            // The database's per-invoice attempt-number uniqueness closes races between
+            // independent BTCPay processes, not just within this service instance.
+            try
+            {
+                await repository.AddAsync(attempt, cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                var concurrent = await repository.GetLatestAsync(storeId, invoiceId, CancellationToken.None);
+                if (concurrent?.AttemptNumber != attempt.AttemptNumber)
+                    throw;
+                if (concurrent.State == FlowAttemptState.Created)
+                    return concurrent;
+                if (concurrent.State is FlowAttemptState.Creating or FlowAttemptState.Uncertain)
+                    throw new FlowPaymentCreationException(
+                        "A concurrent Flow creation has an uncertain outcome and will not be duplicated.",
+                        uncertain: true);
+                throw new FlowPaymentCreationException(
+                    "A concurrent Flow creation already failed. Reactivate the payment prompt before retrying.",
+                    uncertain: false);
+            }
             try
             {
                 var link = await client.CreatePaymentLinkAsync(config, request, cancellationToken);
                 attempt.State = FlowAttemptState.Created;
                 attempt.FlowId = link.FlowId;
                 attempt.PaymentUrl = link.PaymentUrl;
+                attempt.ProviderExpiresAt = link.ProviderExpiresAt;
                 attempt.Error = null;
                 await repository.UpdateAsync(attempt, cancellationToken);
                 return attempt;
@@ -104,5 +129,17 @@ public sealed class FlowPaymentService(
         {
             invoiceLock.Release();
         }
+    }
+
+    private static bool CanReuse(FlowPaymentAttempt attempt, DateTimeOffset now)
+    {
+        var localActive = attempt.ExpiresAt > now;
+        var providerActive = attempt.ProviderExpiresAt > now;
+        // Never create a replacement while a confirmed provider link is still active.
+        // An earlier provider expiry, however, makes renewal safe even if our local
+        // requested deadline has not elapsed yet.
+        return localActive
+            ? attempt.ProviderExpiresAt is null || providerActive
+            : providerActive;
     }
 }

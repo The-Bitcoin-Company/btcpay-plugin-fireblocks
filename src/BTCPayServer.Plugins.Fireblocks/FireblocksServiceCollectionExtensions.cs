@@ -1,7 +1,9 @@
 using BTCPayServer.Payments;
+using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Data;
 using BTCPayServer.Plugins.Fireblocks.Flow;
 using BTCPayServer.Plugins.Fireblocks.Payments;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -10,6 +12,7 @@ namespace BTCPayServer.Plugins.Fireblocks;
 public static class FireblocksServiceCollectionExtensions
 {
     public const string FlowHttpClient = "BTCPayServer.Plugins.Fireblocks.Flow";
+    public const string LocalFlowHttpClient = "BTCPayServer.Plugins.Fireblocks.Flow.LocalFake";
 
     public static IServiceCollection AddFireblocksPaymentMethod(this IServiceCollection services)
     {
@@ -18,9 +21,18 @@ public static class FireblocksServiceCollectionExtensions
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.MaxResponseContentBufferSize = 1024 * 1024;
-        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
+            .UseSSRFProtection();
+        services.AddHttpClient(LocalFlowHttpClient, client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+            client.MaxResponseContentBufferSize = 1024 * 1024;
+        }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
         services.TryAddSingleton<IFlowApiClient>(provider => new FlowApiClient(
-            provider.GetRequiredService<IHttpClientFactory>().CreateClient(FlowHttpClient)));
+            provider.GetRequiredService<IHttpClientFactory>().CreateClient(
+                FlowEndpointSecurity.AllowLocalEndpoints(provider.GetRequiredService<IConfiguration>())
+                    ? LocalFlowHttpClient
+                    : FlowHttpClient)));
         services.TryAddSingleton<IFlowPaymentAttemptRepository, FlowPaymentAttemptRepository>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IFlowPaymentService, FlowPaymentService>();

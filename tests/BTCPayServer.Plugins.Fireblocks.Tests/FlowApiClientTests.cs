@@ -106,6 +106,60 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task SuccessContainingCredentialIsRejectedInsteadOfPersisted()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.Created)
+        {
+            Content = Json($$"""{"flow":{"id":"flow-123","mode":"payment"},"paymentUrl":"https://pay.dynamic.test/?token={{TestData.Credential}}"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.True(exception.Uncertain);
+        Assert.Contains("credential material", exception.Message);
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+    }
+
+    [Fact]
+    public async Task NonJsonErrorIsRedactedBeforeTruncation()
+    {
+        var body = new string('x', 242) + TestData.Credential + new string('y', 300);
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(body)
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+        Assert.DoesNotContain(TestData.Credential[..14], exception.Message);
+        Assert.Contains("[redacted]", exception.Message);
+    }
+
+    [Fact]
+    public async Task StructuredErrorWithUnexpectedTypesRetainsDefiniteStatus()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+        {
+            Content = Json("""{"error":{"message":"invalid destination"},"code":422}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.CreatePaymentLinkAsync(TestData.Config(), Request()));
+
+        Assert.False(exception.Uncertain);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, exception.StatusCode);
+    }
+
+    [Fact]
     public void RedactionCoversCredentialAndAuthorizationText()
     {
         var redacted = FlowApiClient.Redact(

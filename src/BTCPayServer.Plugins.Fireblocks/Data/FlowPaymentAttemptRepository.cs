@@ -21,8 +21,7 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.PaymentAttempts.AsNoTracking()
             .Where(a => a.StoreId == storeId && a.InvoiceId == invoiceId)
-            .OrderByDescending(a => a.CreatedAt)
-            .ThenByDescending(a => a.Id)
+            .OrderByDescending(a => a.AttemptNumber)
             .FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -34,8 +33,7 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         return await context.PaymentAttempts.AsNoTracking()
             .Where(a => a.StoreId == storeId && a.InvoiceId == invoiceId)
-            .OrderBy(a => a.CreatedAt)
-            .ThenBy(a => a.Id)
+            .OrderBy(a => a.AttemptNumber)
             .ToArrayAsync(cancellationToken);
     }
 
@@ -53,6 +51,7 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         persisted.State = attempt.State;
         persisted.FlowId = attempt.FlowId;
         persisted.PaymentUrl = attempt.PaymentUrl;
+        persisted.ProviderExpiresAt = attempt.ProviderExpiresAt;
         persisted.Error = attempt.Error;
         await context.SaveChangesAsync(cancellationToken);
     }

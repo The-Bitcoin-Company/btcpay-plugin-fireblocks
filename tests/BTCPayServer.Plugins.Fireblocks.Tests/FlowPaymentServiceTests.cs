@@ -15,7 +15,7 @@ public class FlowPaymentServiceTests
     {
         var factory = TestDbContextFactory.Create();
         var client = new FakeFlowApiClient();
-        client.Returns(new FlowPaymentLink("flow-123", "https://pay.dynamic.test/?flow=abc", null));
+        client.Returns(new FlowPaymentLink("flow-123", "https://pay.dynamic.test/?flow=abc", Now.AddMinutes(14)));
         var time = new FakeTimeProvider(Now);
         var service = CreateService(factory, client, time);
 
@@ -37,6 +37,9 @@ public class FlowPaymentServiceTests
         Assert.Equal(created.Id, persisted.Id);
         Assert.Equal(created.CreationRequest, persisted.CreationRequest);
         Assert.Equal(25m, persisted.RequestedUsd);
+        Assert.Equal(TestData.Config().ApiEndpoint, persisted.ApiEndpoint);
+        Assert.Equal(TestData.Config().EnvironmentId, persisted.EnvironmentId);
+        Assert.Equal(Now.AddMinutes(14), persisted.ProviderExpiresAt);
         Assert.DoesNotContain(TestData.Credential, persisted.CreationRequest);
 
         var restarted = new FlowPaymentService(restartedRepository, client, time);
@@ -47,12 +50,11 @@ public class FlowPaymentServiceTests
     }
 
     [Fact]
-    public async Task UncertainCreationIsNotBlindlyRetriedAndCanExpireIntoNewAttempt()
+    public async Task UncertainCreationIsNeverBlindlyRetriedEvenAfterLocalExpiry()
     {
         var factory = TestDbContextFactory.Create();
         var client = new FakeFlowApiClient();
         client.Throws(new FlowApiException("timeout", uncertain: true));
-        client.Returns(new FlowPaymentLink("flow-second", "https://pay.dynamic.test/second", null));
         var time = new FakeTimeProvider(Now);
         var service = CreateService(factory, client, time);
 
@@ -62,18 +64,14 @@ public class FlowPaymentServiceTests
 
         await Assert.ThrowsAsync<FlowPaymentCreationException>(() =>
             service.CreateOrGetPaymentLinkAsync("store", "invoice", 5m, Now.AddMinutes(20), TestData.Config()));
+        time.Advance(TimeSpan.FromDays(2));
+        await Assert.ThrowsAsync<FlowPaymentCreationException>(() =>
+            service.CreateOrGetPaymentLinkAsync("store", "invoice", 5m, time.Now.AddMinutes(20), TestData.Config()));
+
         Assert.Single(client.Requests);
         var uncertain = Assert.Single(await new FlowPaymentAttemptRepository(factory).ListAsync("store", "invoice"));
         Assert.Equal(FlowAttemptState.Uncertain, uncertain.State);
         Assert.Null(uncertain.FlowId);
-
-        time.Advance(TimeSpan.FromMinutes(16));
-        var second = await service.CreateOrGetPaymentLinkAsync(
-            "store", "invoice", 5m, time.Now.AddMinutes(20), TestData.Config());
-        Assert.Equal("flow-second", second.FlowId);
-        Assert.NotEqual(uncertain.Id, second.Id);
-        Assert.Equal(2, client.Requests.Count);
-        Assert.Equal(2, (await new FlowPaymentAttemptRepository(factory).ListAsync("store", "invoice")).Count);
     }
 
     [Fact]
@@ -96,7 +94,54 @@ public class FlowPaymentServiceTests
         var failed = Assert.Single(attempts, a => a.State == FlowAttemptState.Failed);
         Assert.Equal("invalid destination", failed.Error);
         Assert.Single(attempts, a => a.State == FlowAttemptState.Created);
+        Assert.Equal(1, attempts[0].AttemptNumber);
+        Assert.Equal(2, attempts[1].AttemptNumber);
         Assert.NotEqual(attempts[0].CreationRequest, attempts[1].CreationRequest);
+
+        var third = await service.CreateOrGetPaymentLinkAsync(
+            "store", "invoice", 5m, Now.AddMinutes(20), TestData.Config());
+        Assert.Equal(second.Id, third.Id);
+        Assert.Equal(2, client.Requests.Count);
+    }
+
+    [Fact]
+    public async Task EarlierProviderExpiryAllowsSafeRenewal()
+    {
+        var factory = TestDbContextFactory.Create();
+        var client = new FakeFlowApiClient();
+        client.Returns(new FlowPaymentLink("flow-first", "https://pay.dynamic.test/first", Now.AddMinutes(5)));
+        client.Returns(new FlowPaymentLink("flow-second", "https://pay.dynamic.test/second", Now.AddMinutes(20)));
+        var time = new FakeTimeProvider(Now);
+        var service = CreateService(factory, client, time);
+
+        var first = await service.CreateOrGetPaymentLinkAsync(
+            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
+        time.Advance(TimeSpan.FromMinutes(6));
+        var second = await service.CreateOrGetPaymentLinkAsync(
+            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
+
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal("flow-second", second.FlowId);
+        Assert.Equal(2, client.Requests.Count);
+    }
+
+    [Fact]
+    public async Task LaterProviderExpiryPreventsDuplicateEvenAfterLocalDeadline()
+    {
+        var factory = TestDbContextFactory.Create();
+        var client = new FakeFlowApiClient();
+        client.Returns(new FlowPaymentLink("flow-first", "https://pay.dynamic.test/first", Now.AddMinutes(30)));
+        var time = new FakeTimeProvider(Now);
+        var service = CreateService(factory, client, time);
+
+        var first = await service.CreateOrGetPaymentLinkAsync(
+            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
+        time.Advance(TimeSpan.FromMinutes(16));
+        var second = await service.CreateOrGetPaymentLinkAsync(
+            "store", "invoice", 5m, Now.AddMinutes(15), TestData.Config());
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Single(client.Requests);
     }
 
     [Fact]

@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
@@ -121,7 +122,13 @@ class FlowFakeHandler(BaseHTTPRequestHandler):
         self.send_json(
             201,
             {
-                "flow": {"id": flow_id, "mode": "payment"},
+                "flow": {
+                    "id": flow_id,
+                    "mode": "payment",
+                    "expiresAt": (
+                        datetime.now(UTC) + timedelta(seconds=body["expiresIn"])
+                    ).isoformat().replace("+00:00", "Z"),
+                },
                 "paymentUrl": make_payment_url(body["baseUrl"], match.group(1), flow_id),
             },
         )

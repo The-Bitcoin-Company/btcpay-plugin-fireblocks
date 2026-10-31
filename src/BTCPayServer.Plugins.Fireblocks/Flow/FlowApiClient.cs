@@ -68,13 +68,21 @@ public sealed partial class FlowApiClient(HttpClient httpClient, TimeSpan? timeo
 
         if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
         {
-            var detail = ReadProviderError(body);
+            // Redact before taking any excerpt so truncation cannot leave a
+            // recognizable credential prefix behind.
+            var detail = ReadProviderError(Redact(body, config.ApiCredential));
             var uncertain = (int)statusCode >= 500;
             throw new FlowApiException(
                 Redact($"Flow provider returned HTTP {(int)statusCode}{detail}.", config.ApiCredential),
                 uncertain,
                 statusCode);
         }
+
+        if (!string.IsNullOrEmpty(config.ApiCredential) &&
+            body.Contains(config.ApiCredential, StringComparison.Ordinal))
+            throw new FlowApiException(
+                "Flow provider response contained credential material. It was rejected and will not be persisted. The creation outcome is uncertain.",
+                true);
 
         try
         {
@@ -98,8 +106,12 @@ public sealed partial class FlowApiClient(HttpClient httpClient, TimeSpan? timeo
         try
         {
             using var json = JsonDocument.Parse(body);
-            var code = json.RootElement.TryGetProperty("code", out var codeElement) ? codeElement.GetString() : null;
-            var error = json.RootElement.TryGetProperty("error", out var errorElement) ? errorElement.GetString() : null;
+            if (json.RootElement.ValueKind != JsonValueKind.Object)
+                return string.Empty;
+            var code = json.RootElement.TryGetProperty("code", out var codeElement) &&
+                codeElement.ValueKind == JsonValueKind.String ? codeElement.GetString() : null;
+            var error = json.RootElement.TryGetProperty("error", out var errorElement) &&
+                errorElement.ValueKind == JsonValueKind.String ? errorElement.GetString() : null;
             if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(error))
                 return $" ({string.Join(": ", new[] { code, error }.Where(v => !string.IsNullOrWhiteSpace(v)))})";
         }

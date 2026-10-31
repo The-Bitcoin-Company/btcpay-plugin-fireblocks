@@ -30,6 +30,16 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("id");
 
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_number");
+
+                    b.Property<string>("ApiEndpoint")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("api_endpoint");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -43,6 +53,12 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)")
                         .HasColumnName("error");
+
+                    b.Property<string>("EnvironmentId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("environment_id");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone")
@@ -58,6 +74,10 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
                         .HasColumnName("invoice_id");
+
+                    b.Property<DateTimeOffset?>("ProviderExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("provider_expires_at");
 
                     b.Property<string>("PaymentUrl")
                         .HasMaxLength(2048)
@@ -85,8 +105,9 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasDatabaseName("ix_fireblocks_attempts_flow_id")
                         .HasFilter("flow_id IS NOT NULL");
 
-                    b.HasIndex("StoreId", "InvoiceId", "CreatedAt")
-                        .HasDatabaseName("ix_fireblocks_attempts_invoice_created");
+                    b.HasIndex("StoreId", "InvoiceId", "AttemptNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ux_fireblocks_attempts_invoice_number");
 
                     b.ToTable("fireblocks_payment_attempts", "Fireblocks");
                 });

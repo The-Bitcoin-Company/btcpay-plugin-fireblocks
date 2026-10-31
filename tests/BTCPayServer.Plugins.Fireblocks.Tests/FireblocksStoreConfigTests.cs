@@ -98,6 +98,32 @@ public class FireblocksStoreConfigTests
         config.ApiEndpoint = "http://flow-fake:8080/api/v0";
         config.HostedPaymentBaseUrl = "http://localhost:14143/pay";
 
-        Assert.Empty(config.Validate());
+        Assert.Empty(config.Validate(allowLocalEndpoints: true));
+        Assert.Contains(config.Validate(), e => e.Field == nameof(config.ApiEndpoint));
+    }
+
+    [Fact]
+    public void NullFieldsBecomeValidationErrorsInsteadOfThrowing()
+    {
+        var config = TestData.Config();
+        config.EnvironmentId = null!;
+        config.ApiEndpoint = null!;
+        config.ApiCredential = null!;
+        config.HostedPaymentBaseUrl = null!;
+        config.SolanaDestinationAddress = null!;
+
+        var errors = config.Validate();
+
+        Assert.Contains(errors, e => e.Field == nameof(config.EnvironmentId));
+        Assert.Contains(errors, e => e.Field == nameof(config.ApiEndpoint));
+        Assert.Contains(errors, e => e.Field == nameof(config.ApiCredential));
+        Assert.Contains(errors, e => e.Field == nameof(config.HostedPaymentBaseUrl));
+        Assert.Contains(errors, e => e.Field == nameof(config.SolanaDestinationAddress));
+    }
+
+    [Fact]
+    public void Base58ZeroAddressHasExactSolanaKeyLength()
+    {
+        Assert.True(FireblocksStoreConfig.IsValidSolanaAddress(new string('1', 32)));
     }
 }

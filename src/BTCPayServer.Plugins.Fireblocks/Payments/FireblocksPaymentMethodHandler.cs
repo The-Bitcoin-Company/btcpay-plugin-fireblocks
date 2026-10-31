@@ -2,6 +2,7 @@ using BTCPayServer.Data;
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Flow;
+using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -12,13 +13,21 @@ public sealed class FireblocksPaymentPromptDetails
     public required string AttemptId { get; init; }
     public required string FlowId { get; init; }
     public required string PaymentUrl { get; init; }
+    public required decimal RequestedUsd { get; init; }
     public required long ExpiresAt { get; init; }
+    public long? ProviderExpiresAt { get; init; }
 }
 
 public sealed class FireblocksPaymentDetails;
 
-public sealed class FireblocksPaymentMethodHandler(IFlowPaymentService paymentService) : IPaymentMethodHandler
+public sealed class FireblocksPaymentMethodHandler(
+    IFlowPaymentService paymentService,
+    IConfiguration? configuration = null,
+    TimeProvider? timeProvider = null) : IPaymentMethodHandler
 {
+    private readonly bool _allowLocalEndpoints = FlowEndpointSecurity.AllowLocalEndpoints(configuration);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     public static readonly PaymentMethodId PaymentMethod = new("FIREBLOCKS-FLOW");
 
     public PaymentMethodId PaymentMethodId => PaymentMethod;
@@ -46,12 +55,16 @@ public sealed class FireblocksPaymentMethodHandler(IFlowPaymentService paymentSe
             throw new PaymentMethodUnavailableException("Fireblocks Flow requires a fixed, positive invoice amount.");
 
         var config = ParsePaymentMethodConfig(context.PaymentMethodConfig);
-        var errors = config.Validate();
+        var errors = config.Validate(_allowLocalEndpoints);
         if (errors.Count != 0)
             throw new PaymentMethodUnavailableException("Fireblocks Flow store configuration is incomplete or invalid.");
 
         try
         {
+            var policyExpiresAt = _timeProvider.GetUtcNow().AddMinutes(config.PaymentExpiryMinutes);
+            if (context.InvoiceEntity.ExpirationTime > policyExpiresAt)
+                context.InvoiceEntity.ExpirationTime = policyExpiresAt;
+
             var attempt = await paymentService.CreateOrGetPaymentLinkAsync(
                 context.Store.Id,
                 context.InvoiceEntity.Id,
@@ -67,7 +80,9 @@ public sealed class FireblocksPaymentMethodHandler(IFlowPaymentService paymentSe
                 AttemptId = attempt.Id,
                 FlowId = attempt.FlowId,
                 PaymentUrl = attempt.PaymentUrl,
-                ExpiresAt = attempt.ExpiresAt.ToUnixTimeSeconds()
+                RequestedUsd = attempt.RequestedUsd,
+                ExpiresAt = attempt.ExpiresAt.ToUnixTimeSeconds(),
+                ProviderExpiresAt = attempt.ProviderExpiresAt?.ToUnixTimeSeconds()
             }, Serializer);
         }
         catch (FlowPaymentCreationException exception)
@@ -99,7 +114,7 @@ public sealed class FireblocksPaymentMethodHandler(IFlowPaymentService paymentSe
         var config = ParsePaymentMethodConfig(validationContext.Config);
         var previous = validationContext.PreviousConfig is null ? null : ParsePaymentMethodConfig(validationContext.PreviousConfig);
         config.PreserveCredential(previous);
-        foreach (var error in config.Validate())
+        foreach (var error in config.Validate(_allowLocalEndpoints))
             validationContext.ModelState.AddModelError(error.Field, error.Message);
 
         // Preserve the exact validated token, including the write-only credential.

@@ -48,20 +48,21 @@ public sealed class FireblocksStoreConfig
             ApiCredential = previous.ApiCredential;
     }
 
-    public IReadOnlyList<FireblocksConfigurationError> Validate()
+    public IReadOnlyList<FireblocksConfigurationError> Validate(bool allowLocalEndpoints = false)
     {
         var errors = new List<FireblocksConfigurationError>();
-        EnvironmentId = EnvironmentId.Trim();
-        ApiEndpoint = ApiEndpoint.Trim();
-        HostedPaymentBaseUrl = HostedPaymentBaseUrl.Trim();
-        SolanaDestinationAddress = SolanaDestinationAddress.Trim();
+        EnvironmentId = (EnvironmentId ?? string.Empty).Trim();
+        ApiEndpoint = (ApiEndpoint ?? string.Empty).Trim();
+        ApiCredential ??= string.Empty;
+        HostedPaymentBaseUrl = (HostedPaymentBaseUrl ?? string.Empty).Trim();
+        SolanaDestinationAddress = (SolanaDestinationAddress ?? string.Empty).Trim();
 
         if (EnvironmentId.Length is 0 or > 200 || EnvironmentId.Any(char.IsWhiteSpace))
             errors.Add(new(nameof(EnvironmentId), "Enter a valid Dynamic environment ID."));
         if (string.IsNullOrWhiteSpace(ApiCredential))
             errors.Add(new(nameof(ApiCredential), "Enter a server API token with the flow.write scope."));
-        ValidateEndpoint(ApiEndpoint, nameof(ApiEndpoint), "API endpoint", errors);
-        ValidateEndpoint(HostedPaymentBaseUrl, nameof(HostedPaymentBaseUrl), "Hosted payment base URL", errors);
+        ValidateEndpoint(ApiEndpoint, nameof(ApiEndpoint), "API endpoint", allowLocalEndpoints, errors);
+        ValidateEndpoint(HostedPaymentBaseUrl, nameof(HostedPaymentBaseUrl), "Hosted payment base URL", allowLocalEndpoints, errors);
         if (!IsValidSolanaAddress(SolanaDestinationAddress))
             errors.Add(new(nameof(SolanaDestinationAddress), "Enter a valid base58 Solana address (32 bytes)."));
         if (PaymentExpiryMinutes is < 1 or > 525_600)
@@ -73,6 +74,7 @@ public sealed class FireblocksStoreConfig
         string value,
         string field,
         string displayName,
+        bool allowLocalEndpoints,
         ICollection<FireblocksConfigurationError> errors)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
@@ -86,9 +88,9 @@ public sealed class FireblocksStoreConfig
 
         // Plain HTTP is intended only for deterministic local fakes. Real provider
         // credentials must always use TLS.
-        if (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback &&
-            !string.Equals(uri.Host, "flow-fake", StringComparison.OrdinalIgnoreCase))
-            errors.Add(new(field, $"{displayName} must use HTTPS except for a local test provider."));
+        if (uri.Scheme == Uri.UriSchemeHttp &&
+            (!allowLocalEndpoints || (!uri.IsLoopback && !string.Equals(uri.Host, "flow-fake", StringComparison.OrdinalIgnoreCase))))
+            errors.Add(new(field, $"{displayName} must use HTTPS unless the explicitly enabled local fake is in use."));
     }
 
     public static bool IsValidSolanaAddress(string value)
@@ -106,7 +108,7 @@ public sealed class FireblocksStoreConfig
             number = (number * 58) + digit;
         }
 
-        var bytes = number.ToByteArray(isUnsigned: true, isBigEndian: true);
+        var bytes = number.IsZero ? [] : number.ToByteArray(isUnsigned: true, isBigEndian: true);
         var leadingZeroes = value.TakeWhile(c => c == '1').Count();
         return bytes.Length + leadingZeroes == 32;
     }

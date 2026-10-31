@@ -31,16 +31,21 @@ public sealed class FireblocksDbContext(DbContextOptions<FireblocksDbContext> op
         attempt.Property(a => a.Id).HasColumnName("id").HasMaxLength(64);
         attempt.Property(a => a.StoreId).HasColumnName("store_id").HasMaxLength(100).IsRequired();
         attempt.Property(a => a.InvoiceId).HasColumnName("invoice_id").HasMaxLength(100).IsRequired();
+        attempt.Property(a => a.AttemptNumber).HasColumnName("attempt_number");
         attempt.Property(a => a.CreatedAt).HasColumnName("created_at");
         attempt.Property(a => a.ExpiresAt).HasColumnName("expires_at");
+        attempt.Property(a => a.ProviderExpiresAt).HasColumnName("provider_expires_at");
+        attempt.Property(a => a.ApiEndpoint).HasColumnName("api_endpoint").HasMaxLength(2048).IsRequired();
+        attempt.Property(a => a.EnvironmentId).HasColumnName("environment_id").HasMaxLength(200).IsRequired();
         attempt.Property(a => a.RequestedUsd).HasColumnName("requested_usd").HasColumnType("numeric(38,18)");
         attempt.Property(a => a.CreationRequest).HasColumnName("creation_request").IsRequired();
         attempt.Property(a => a.State).HasColumnName("state").HasConversion<int>();
         attempt.Property(a => a.FlowId).HasColumnName("flow_id").HasMaxLength(128);
         attempt.Property(a => a.PaymentUrl).HasColumnName("payment_url").HasMaxLength(2048);
         attempt.Property(a => a.Error).HasColumnName("error").HasMaxLength(512);
-        attempt.HasIndex(a => new { a.StoreId, a.InvoiceId, a.CreatedAt })
-            .HasDatabaseName("ix_fireblocks_attempts_invoice_created");
+        attempt.HasIndex(a => new { a.StoreId, a.InvoiceId, a.AttemptNumber })
+            .HasDatabaseName("ux_fireblocks_attempts_invoice_number")
+            .IsUnique();
         attempt.HasIndex(a => a.FlowId)
             .HasDatabaseName("ix_fireblocks_attempts_flow_id")
             .IsUnique()

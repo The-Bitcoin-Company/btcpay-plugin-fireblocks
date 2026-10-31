@@ -7,6 +7,7 @@ using BTCPayServer.Plugins.Fireblocks.Payments;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 
 namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 
@@ -16,7 +17,8 @@ namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public sealed class UIFireblocksController(
     StoreRepository storeRepository,
-    FireblocksPaymentMethodHandler handler) : Controller
+    FireblocksPaymentMethodHandler handler,
+    IConfiguration configuration) : Controller
 {
     private StoreData CurrentStore => HttpContext.GetStoreData();
 
@@ -44,7 +46,7 @@ public sealed class UIFireblocksController(
             PaymentExpiryMinutes = model.PaymentExpiryMinutes
         };
         config.PreserveCredential(previous);
-        foreach (var error in config.Validate())
+        foreach (var error in config.Validate(FlowEndpointSecurity.AllowLocalEndpoints(configuration)))
             ModelState.AddModelError(error.Field, error.Message);
 
         if (!ModelState.IsValid)
