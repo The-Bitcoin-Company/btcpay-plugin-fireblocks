@@ -37,7 +37,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OPENER = urllib.request.build_opener(NoRedirect)
+def build_opener() -> urllib.request.OpenerDirector:
+    # Never send loopback API credentials through environment-configured proxies.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
+
+
+OPENER = build_opener()
 BASE_URL = validate_base_url(os.environ.get("BTCPAY_DEV_URL", "http://localhost:14142"))
 EMAIL = os.environ.get("BTCPAY_DEV_EMAIL", "dev@fireblocks.local")
 PASSWORD = os.environ.get("BTCPAY_DEV_PASSWORD", "DevPassword123!")
@@ -84,7 +89,8 @@ def request(
             content = response.read()
             return json.loads(content) if content else None
     except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")
+        with error:
+            detail = error.read().decode(errors="replace")
         raise RuntimeError(f"{method} {path} failed ({error.code}): {detail}") from error
 
 

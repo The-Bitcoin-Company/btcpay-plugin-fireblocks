@@ -91,7 +91,8 @@ Invoice**. Seeding also configures a fixed **watch-only regtest BTC wallet** (no
 saved), so checkout has an on-chain payment method. The well-known development mnemonic is public
 and must never hold real funds. The helper uses only Python's standard library. Override
 `BTCPAY_DEV_URL`, `BTCPAY_DEV_EMAIL`, `BTCPAY_DEV_PASSWORD`, or `BTCPAY_DEV_STORE_NAME` when needed.
-For production isolation, `BTCPAY_DEV_URL` must be loopback and API redirects are refused.
+For production isolation, `BTCPAY_DEV_URL` must be loopback; API redirects and environment proxies
+are disabled.
 `BTCPAY_DEV_STARTUP_TIMEOUT` controls the readiness wait in seconds (default 300). Seeding stores
 an unrestricted key for the disposable admin in `artifacts/dev/api-key` with owner-only permissions;
 routine calls use that key to avoid Basic-auth expiry and login throttling. The key is ignored by Git

@@ -1,7 +1,10 @@
 # pyright: basic
 """Regression tests for local-only Greenfield helper behavior."""
 
+import http.server
+import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import ANY, call, patch
@@ -29,6 +32,54 @@ class BaseUrlTests(unittest.TestCase):
         ):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 btcpay.validate_base_url(url)
+
+
+class JsonHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "https://example.com")
+            self.end_headers()
+            return
+        body = b'{"ok": true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+class HttpIsolationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), JsonHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def test_environment_proxy_is_not_used(self) -> None:
+        proxy = {"http_proxy": "http://127.0.0.1:1", "HTTP_PROXY": "http://127.0.0.1:1"}
+        with patch.dict(os.environ, proxy, clear=True):
+            opener = btcpay.build_opener()
+        with (
+            patch.object(btcpay, "BASE_URL", self.base_url),
+            patch.object(btcpay, "OPENER", opener),
+        ):
+            self.assertEqual(btcpay.request("GET", "/", authenticate=False), {"ok": True})
+
+    def test_redirect_is_not_followed(self) -> None:
+        with (
+            patch.object(btcpay, "BASE_URL", self.base_url),
+            self.assertRaisesRegex(RuntimeError, r"\(302\)"),
+        ):
+            btcpay.request("GET", "/redirect", authenticate=False)
 
 
 class SeedTests(unittest.TestCase):
