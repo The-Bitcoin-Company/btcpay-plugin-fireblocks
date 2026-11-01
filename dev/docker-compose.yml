@@ -18,6 +18,8 @@ services:
         condition: service_healthy
       nbxplorer:
         condition: service_started
+      flow-fake:
+        condition: service_healthy
     environment:
       BTCPAY_NETWORK: regtest
       BTCPAY_CHAINS: btc
@@ -33,11 +35,30 @@ services:
       BTCPAY_RECOMMENDED-PLUGINS: ""
       BTCPAY_UPDATEURL: ""
       BTCPAY_VERBOSE: "true"
+      FIREBLOCKS_ENABLE_LOCAL_FLOW_FAKE: "true"
     ports:
       - 127.0.0.1:14142:8080
     volumes:
       - btcpay_datadir:/datadir
       - ../artifacts/dev-plugin:/datadir/Plugins/BTCPayServer.Plugins.Fireblocks:ro
+
+  flow-fake:
+    image: python:3.13-alpine
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      FLOW_FAKE_MODE: ${FLOW_FAKE_MODE:-success}
+      FLOW_FAKE_TIMEOUT_SECONDS: ${FLOW_FAKE_TIMEOUT_SECONDS:-30}
+    command: ["python", "/app/flow_fake.py"]
+    volumes:
+      - ./flow_fake.py:/app/flow_fake.py:ro
+    ports:
+      - 127.0.0.1:14143:8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 
   postgres:
     image: postgres:18.1

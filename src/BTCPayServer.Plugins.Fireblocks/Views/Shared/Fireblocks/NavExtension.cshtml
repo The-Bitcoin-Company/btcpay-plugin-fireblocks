@@ -1,0 +1,5 @@
+@model BTCPayServer.Components.MainNav.MainNavViewModel
+
+<li class="nav-item nav-item-sub" permission="@Policies.CanModifyStoreSettings">
+    <a layout-menu-item="Fireblocks" asp-area="@Plugin.Area" asp-controller="UIFireblocks" asp-action="Configure" asp-route-storeId="@Model.Store.Id">Fireblocks Flow</a>
+</li>

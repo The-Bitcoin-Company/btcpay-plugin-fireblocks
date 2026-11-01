@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# pyright: basic
+"""Deterministic, credential-free Dynamic Flow fake for the disposable dev harness."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+import time
+import uuid
+from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+from urllib.parse import urlsplit
+
+USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+FAKE_CREDENTIAL = "dev-flow-token"
+
+
+class FakeRequestError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def validate_request(body: dict[str, Any]) -> None:
+    if body.get("currency") != "USD" or not re.fullmatch(r"[0-9]+\.[0-9]{2}", str(body.get("amount"))):
+        raise FakeRequestError("amount_invalid", "A fixed USD amount with two decimals is required")
+    if not isinstance(body.get("expiresIn"), int) or body["expiresIn"] <= 0:
+        raise FakeRequestError("expiry_invalid", "expiresIn must be positive")
+
+    settlement = body.get("settlementConfig", {})
+    expected_settlement = {
+        "chainName": "SOL",
+        "chainId": "101",
+        "symbol": "USDC",
+        "tokenAddress": USDC_SOLANA_MINT,
+        "tokenDecimals": 6,
+    }
+    if settlement.get("strategy") != "preferred_order" or settlement.get("settlements") != [expected_settlement]:
+        raise FakeRequestError("settlement_invalid", "Exactly one USDC/Solana settlement is required")
+
+    destinations = body.get("destinationConfig", {}).get("destinations")
+    if (
+        not isinstance(destinations, list)
+        or len(destinations) != 1
+        or destinations[0].get("chainName") != "SOL"
+        or destinations[0].get("type") != "address"
+        or not destinations[0].get("identifier")
+    ):
+        raise FakeRequestError("destination_invalid", "Exactly one Solana address destination is required")
+
+    memo = body.get("memo", {})
+    if not memo.get("invoiceId") or not memo.get("paymentAttemptId"):
+        raise FakeRequestError("memo_invalid", "Invoice and payment-attempt correlation is required")
+    base_url = body.get("baseUrl", "")
+    if urlsplit(base_url).scheme not in {"http", "https"} or not urlsplit(base_url).netloc:
+        raise FakeRequestError("base_url_invalid", "An absolute hosted baseUrl is required")
+
+
+def make_payment_url(base_url: str, environment_id: str, flow_id: str) -> str:
+    correlation = json.dumps(
+        {"environmentId": environment_id, "flowId": flow_id}, separators=(",", ":")
+    ).encode()
+    segment = base64.urlsafe_b64encode(correlation).decode().rstrip("=")
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}flow={segment}"
+
+
+class FlowFakeHandler(BaseHTTPRequestHandler):
+    mode = os.environ.get("FLOW_FAKE_MODE", "success")
+    timeout_seconds = int(os.environ.get("FLOW_FAKE_TIMEOUT_SECONDS", "30"))
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self.send_json(200, {"ok": True})
+            return
+        if self.path.startswith("/pay"):
+            content = (
+                b"<!doctype html><title>Fake Flow payment</title>"
+                b"<h1>Fake hosted Flow payment</h1>"
+                b"<p>This page never reports settlement to BTCPay.</p>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        self.send_json(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        match = re.fullmatch(r"/api/v0/server/([^/]+)/payment-links", self.path)
+        if match is None:
+            self.send_json(404, {"error": "not found"})
+            return
+        if self.headers.get("Authorization") != f"Bearer {FAKE_CREDENTIAL}":
+            self.send_json(401, {"code": "unauthorized", "error": "invalid fake credential"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 1024 * 1024:
+                raise FakeRequestError("request_too_large", "request body is too large")
+            body = json.loads(self.rfile.read(length))
+            validate_request(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_json(400, {"code": "invalid_json", "error": "invalid JSON"})
+            return
+        except FakeRequestError as error:
+            self.send_json(422, {"code": error.code, "error": str(error)})
+            return
+
+        if self.mode == "error":
+            self.send_json(422, {"code": "fake_provider_error", "error": "requested fake failure"})
+            return
+        if self.mode == "timeout":
+            time.sleep(self.timeout_seconds)
+
+        flow_id = str(uuid.uuid4())
+        self.send_json(
+            201,
+            {
+                "flow": {
+                    "id": flow_id,
+                    "mode": "payment",
+                    "expiresAt": (
+                        datetime.now(UTC) + timedelta(seconds=body["expiresIn"])
+                    ).isoformat().replace("+00:00", "Z"),
+                },
+                "paymentUrl": make_payment_url(body["baseUrl"], match.group(1), flow_id),
+            },
+        )
+
+    def send_json(self, status: int, body: dict[str, Any]) -> None:
+        content = json.dumps(body, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def log_message(self, format_string: str, *args: Any) -> None:
+        # Never log Authorization headers or request bodies.
+        print(f"flow-fake: {format_string % args}")
+
+
+def main() -> None:
+    server = ThreadingHTTPServer(("0.0.0.0", 8080), FlowFakeHandler)
+    print(f"flow-fake listening on :8080 in {FlowFakeHandler.mode} mode")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

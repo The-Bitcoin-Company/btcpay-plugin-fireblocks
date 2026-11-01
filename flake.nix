@@ -43,7 +43,7 @@
             '';
 
             meta = {
-              description = "Fireblocks integration scaffold for BTCPay Server";
+              description = "Fireblocks Flow hosted payment links for BTCPay Server";
               homepage = "https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks";
               license = nixpkgs.lib.licenses.mit;
               platforms = nixpkgs.lib.platforms.linux;

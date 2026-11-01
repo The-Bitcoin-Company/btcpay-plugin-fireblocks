@@ -173,3 +173,26 @@ def ensure_store() -> dict[str, Any]:
                     raise
                 time.sleep(2)
     return store
+
+
+def ensure_flow_configuration(store: dict[str, Any]) -> dict[str, Any]:
+    """Configure the payment method against the disposable in-compose Flow fake."""
+    payment_method = "FIREBLOCKS-FLOW"
+    result = request(
+        "PUT",
+        f"/api/v1/stores/{store['id']}/payment-methods/{payment_method}",
+        {
+            "enabled": True,
+            "config": {
+                "environmentId": "dev-environment",
+                "apiEndpoint": "http://flow-fake:8080/api/v0",
+                "apiCredential": "dev-flow-token",
+                "hostedPaymentBaseUrl": "http://localhost:14143/pay",
+                "solanaDestinationAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                "paymentExpiryMinutes": 15,
+            },
+        },
+    )
+    if "dev-flow-token" in json.dumps(result):
+        raise RuntimeError("Flow configuration response exposed its API credential")
+    return result
