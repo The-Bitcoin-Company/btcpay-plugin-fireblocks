@@ -39,6 +39,90 @@ public class FlowPaymentConcurrencyTests
         Assert.Single(await new FlowPaymentAttemptRepository(factory).ListAsync("store", "invoice"));
     }
 
+    [Fact]
+    public async Task RelationalReservationAllowsOnlyOneTransactionAcrossRepositories()
+    {
+        var factory = await RelationalFactory();
+        var repository = new FlowPaymentAttemptRepository(factory);
+        await repository.AddAsync(Attempt());
+        var first = await repository.GetByFlowIdAsync("store", "flow-1");
+        var second = await repository.GetByFlowIdAsync("store", "flow-1");
+        first!.SettlementTransactionId = "tx-first";
+        first.SettlementAmountAtomic = "1000000";
+        first.SettlementAmount = 1m;
+        second!.SettlementTransactionId = "tx-second";
+        second.SettlementAmountAtomic = "2000000";
+        second.SettlementAmount = 2m;
+
+        var results = await Task.WhenAll(
+            repository.ReserveSettlementAsync(first),
+            new FlowPaymentAttemptRepository(factory).ReserveSettlementAsync(second));
+
+        Assert.Single(results, result => result);
+        var persisted = await repository.GetByFlowIdAsync("store", "flow-1");
+        Assert.Equal(results[0] ? "tx-first" : "tx-second", persisted!.SettlementTransactionId);
+    }
+
+    [Fact]
+    public async Task StaleUpdatesCannotEraseSettlementOrRegressTerminalState()
+    {
+        var factory = await RelationalFactory();
+        var repository = new FlowPaymentAttemptRepository(factory);
+        await repository.AddAsync(Attempt());
+        var stale = await repository.GetByFlowIdAsync("store", "flow-1");
+        var settled = await repository.GetByFlowIdAsync("store", "flow-1");
+        settled!.SettlementTransactionId = "tx-settled";
+        settled.SettlementAmountAtomic = "25000000";
+        settled.SettlementAmount = 25m;
+        Assert.True(await repository.ReserveSettlementAsync(settled));
+        settled.State = FlowAttemptState.Settled;
+        await repository.FinalizeSettlementAsync(settled);
+
+        stale!.State = FlowAttemptState.Created;
+        stale.Error = "delayed diagnostic";
+        await repository.UpdateReconciliationDiagnosticAsync(stale);
+        await repository.UpdateAsync(stale); // even a misplaced legacy caller is guarded
+        stale.SettlementTransactionId = "tx-other";
+        stale.SettlementAmountAtomic = "1";
+        stale.SettlementAmount = 0.000001m;
+        Assert.False(await new FlowPaymentAttemptRepository(factory).ReserveSettlementAsync(stale));
+
+        var persisted = await repository.GetByFlowIdAsync("store", "flow-1");
+        Assert.Equal(FlowAttemptState.Settled, persisted!.State);
+        Assert.Equal("tx-settled", persisted.SettlementTransactionId);
+        Assert.Equal("25000000", persisted.SettlementAmountAtomic);
+        Assert.Equal(25m, persisted.SettlementAmount);
+        Assert.Null(persisted.Error);
+    }
+
+    private static async Task<TestDbContextFactory> RelationalFactory()
+    {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<FireblocksDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        await using (var context = new FireblocksDbContext(options))
+            await context.Database.EnsureCreatedAsync();
+        return new TestDbContextFactory(options);
+    }
+
+    private static FlowPaymentAttempt Attempt() => new()
+    {
+        Id = "attempt-1",
+        StoreId = "store",
+        InvoiceId = "invoice",
+        AttemptNumber = 1,
+        CreatedAt = DateTimeOffset.UtcNow,
+        ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
+        ApiEndpoint = "https://app.dynamic.test/api/v0",
+        EnvironmentId = "env_test",
+        RequestedUsd = 25m,
+        CreationRequest = "{}",
+        State = FlowAttemptState.Created,
+        FlowId = "flow-1"
+    };
+
     private sealed class ConcurrentFlowClient : IFlowApiClient
     {
         private int _callCount;

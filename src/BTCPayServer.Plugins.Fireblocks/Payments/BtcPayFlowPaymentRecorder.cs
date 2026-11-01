@@ -6,6 +6,7 @@ using BTCPayServer.Plugins.Fireblocks.Data;
 using BTCPayServer.Plugins.Fireblocks.Flow;
 using BTCPayServer.Rating;
 using BTCPayServer.Services.Invoices;
+using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Plugins.Fireblocks.Payments;
 
@@ -49,8 +50,12 @@ public sealed class BtcPayFlowPaymentRecorder(
             return FlowPaymentRecordResult.Conflict;
         if (rate == 0m)
         {
-            invoice.AddRate(new CurrencyPair(FireblocksStoreConfig.UsdcSymbol, "USD"), 1m);
-            await invoiceRepository.UpdatePrompt(invoice.Id, prompt);
+            if (!await EnsureUsdcRateAsync(invoice.Id))
+                return FlowPaymentRecordResult.Conflict;
+            invoice = await invoiceRepository.GetInvoice(attempt.InvoiceId);
+            prompt = invoice?.GetPaymentPrompt(handler.PaymentMethodId);
+            if (invoice is null || prompt is null)
+                return FlowPaymentRecordResult.Conflict;
         }
 
         var paymentData = CreatePaymentData(invoice, attempt, evidence, handler);
@@ -58,16 +63,48 @@ public sealed class BtcPayFlowPaymentRecorder(
         if (payment is null)
         {
             var refreshed = await invoiceRepository.GetInvoice(attempt.InvoiceId);
-            return refreshed?.GetPayments(false).Any(p =>
-                p.Id == evidence.TransactionId && p.PaymentMethodId == handler.PaymentMethodId) == true
-                ? FlowPaymentRecordResult.AlreadyRecorded
-                : FlowPaymentRecordResult.Conflict;
+            var existing = refreshed?.GetPayments(false).SingleOrDefault(p =>
+                p.Id == evidence.TransactionId && p.PaymentMethodId == handler.PaymentMethodId);
+            if (existing is null)
+                return FlowPaymentRecordResult.Conflict;
+            // AddPayment may have committed before a crash prevented ReceivedPayment.
+            // Wake the watcher idempotently so on-time accounting is reevaluated now.
+            eventAggregator.Publish(new InvoiceNeedUpdateEvent(refreshed!.Id));
+            return FlowPaymentRecordResult.AlreadyRecorded;
         }
 
         var updated = await invoiceRepository.GetInvoice(attempt.InvoiceId);
         if (updated is not null)
             eventAggregator.Publish(new InvoiceEvent(updated, InvoiceEvent.ReceivedPayment) { Payment = payment });
         return FlowPaymentRecordResult.Recorded;
+    }
+
+    private async Task<bool> EnsureUsdcRateAsync(string invoiceId)
+    {
+        // UpdatePrompt intentionally persists only prompt details. Rates live in the
+        // invoice blob, so update that blob directly with the host's concurrency token.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            await using var context = invoiceRepository.DbContextFactory.CreateContext();
+            var data = await context.Invoices.FindAsync(invoiceId);
+            if (data is null)
+                return false;
+            var persisted = data.GetBlob();
+            if (persisted.TryGetRate(FireblocksStoreConfig.UsdcSymbol, out var existing))
+                return existing == 1m;
+            persisted.AddRate(new CurrencyPair(FireblocksStoreConfig.UsdcSymbol, "USD"), 1m);
+            data.SetBlob(persisted);
+            try
+            {
+                await context.SaveChangesAsync();
+                return true;
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                // Retry against the current blob; another writer may have added it.
+            }
+        }
+        return false;
     }
 
     public static PaymentData CreatePaymentData(

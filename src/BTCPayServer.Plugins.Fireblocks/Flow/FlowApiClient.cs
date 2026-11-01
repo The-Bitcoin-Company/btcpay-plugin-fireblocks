@@ -160,6 +160,12 @@ public sealed partial class FlowApiClient(
             var snapshot = JsonSerializer.Deserialize<FlowStateResponse>(body, JsonOptions)?.Flow;
             if (snapshot?.Id is not { Length: > 0 })
                 throw new FlowApiException("Flow provider returned an incomplete reconciliation response.", true);
+            // Check decoded values as well as raw bytes. JSON/URI encoding must not
+            // smuggle credential material into transaction or settlement persistence.
+            var decoded = JsonSerializer.Serialize(snapshot, JsonOptions);
+            if (ContainsCredential(decoded, config.ApiCredential) ||
+                ContainsCredential(decoded, config.WebhookSecret))
+                throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
             return snapshot;
         }
         catch (JsonException)

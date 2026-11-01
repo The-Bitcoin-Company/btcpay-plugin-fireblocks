@@ -4,10 +4,12 @@
 
 import argparse
 import json
+import subprocess
 import time
 import urllib.error
 import urllib.request
 from decimal import Decimal
+from pathlib import Path
 
 from btcpay import ensure_flow_configuration, ensure_store, request, wait_until_ready
 
@@ -171,6 +173,42 @@ def exercise_amount_policy(store_id: str) -> None:
     print(f"Overpayment invoice {over_id}: Settled with BTCPay PaidOver accounting")
 
 
+def run_sql(statement: str) -> None:
+    subprocess.run([
+        "docker", "compose", "-f", str(Path(__file__).parent / "docker-compose.yml"),
+        "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "btcpayserver",
+        "-c", statement,
+    ], check=True, capture_output=True, text=True)
+
+
+def exercise_legacy_rate_recovery(store_id: str) -> None:
+    invoice_id, flow_id = create_flow_invoice(store_id, f"flow-legacy-rate-{int(time.time())}")
+    # Simulate an invoice activated before USDC accounting was introduced. The
+    # recorder must persist the fixed rate in the invoice blob before AddPayment.
+    run_sql(f"UPDATE \"Invoices\" SET \"Blob2\" = \"Blob2\" #- '{{rates,USDC}}' WHERE \"Id\" = '{invoice_id}'")
+    fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
+    notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
+    wait_for_status(store_id, invoice_id, "Settled", 25)
+    print(f"Legacy-rate invoice {invoice_id}: persisted USDC accounting before payment")
+
+
+def exercise_existing_payment_recovery(store_id: str) -> None:
+    invoice_id, flow_id = create_flow_invoice(store_id, f"flow-existing-payment-{int(time.time())}")
+    fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
+    notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
+    wait_for_status(store_id, invoice_id, "Settled", 25)
+
+    # Recreate the durable state of a crash after AddPayment but before the invoice
+    # watcher ran: payment exists, invoice is unpaid, and the attempt is outstanding.
+    run_sql(f"UPDATE \"Invoices\" SET \"Status\" = 'New', \"ExceptionStatus\" = 'None' WHERE \"Id\" = '{invoice_id}'")
+    run_sql(f"UPDATE \"Fireblocks\".fireblocks_payment_attempts SET state = 1, error = NULL WHERE invoice_id = '{invoice_id}'")
+    notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
+    wait_for_status(store_id, invoice_id, "Settled", 25)
+    if len(flow_method(store_id, invoice_id).get("payments", [])) != 1:
+        raise RuntimeError(f"Existing-payment recovery duplicated payment for {invoice_id}")
+    print(f"Existing-payment invoice {invoice_id}: idempotent update woke BTCPay accounting")
+
+
 def exercise_reconciliation(store_id: str) -> None:
     invoice_id, flow_id = create_flow_invoice(store_id, f"flow-reconcile-{int(time.time())}")
     fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
@@ -191,6 +229,8 @@ def main() -> None:
     ensure_flow_configuration(store)
     exercise_webhook(store["id"])
     exercise_amount_policy(store["id"])
+    exercise_legacy_rate_recovery(store["id"])
+    exercise_existing_payment_recovery(store["id"])
     if not args.skip_reconciliation:
         exercise_reconciliation(store["id"])
 

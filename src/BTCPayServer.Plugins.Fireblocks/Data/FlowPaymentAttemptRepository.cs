@@ -10,7 +10,10 @@ public interface IFlowPaymentAttemptRepository
     Task<IReadOnlyList<FlowPaymentAttempt>> ListOutstandingAsync(int limit, CancellationToken cancellationToken = default);
     Task AddAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task UpdateAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
+    Task UpdateReconciliationDiagnosticAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
+    Task UpdateReconciliationTerminalAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task<bool> ReserveSettlementAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
+    Task FinalizeSettlementAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task<bool> AddWebhookEventAsync(FlowWebhookEvent webhookEvent, CancellationToken cancellationToken = default);
 }
 
@@ -56,11 +59,15 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        return await context.PaymentAttempts.AsNoTracking()
+        var outstanding = await context.PaymentAttempts.AsNoTracking()
             .Where(a => a.FlowId != null && a.State == FlowAttemptState.Created)
+            .ToArrayAsync(cancellationToken);
+        // Sort after loading so relational test providers without DateTimeOffset
+        // ORDER BY support exercise the same fair reconciliation behavior.
+        return outstanding
             .OrderBy(a => a.LastReconciledAt ?? a.CreatedAt)
             .Take(limit)
-            .ToArrayAsync(cancellationToken);
+            .ToArray();
     }
 
     public async Task AddAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default)
@@ -74,19 +81,45 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         var persisted = await context.PaymentAttempts.SingleAsync(a => a.Id == attempt.Id, cancellationToken);
+        // This method belongs to link creation. Never let a delayed creator or
+        // diagnostic caller regress a reconciled terminal state.
+        if (persisted.State is FlowAttemptState.Failed or FlowAttemptState.Settled or FlowAttemptState.Cancelled)
+            return;
         persisted.State = attempt.State;
         persisted.FlowId = attempt.FlowId;
         persisted.PaymentUrl = attempt.PaymentUrl;
         persisted.ProviderExpiresAt = attempt.ProviderExpiresAt;
         persisted.Error = attempt.Error;
-        persisted.LastReconciledAt = attempt.LastReconciledAt;
-        persisted.ProviderStatus = attempt.ProviderStatus;
-        persisted.RiskStatus = attempt.RiskStatus;
-        persisted.SettlementTransactionId = attempt.SettlementTransactionId;
-        persisted.SettlementAmountAtomic = attempt.SettlementAmountAtomic;
-        persisted.SettlementAmount = attempt.SettlementAmount;
-        persisted.SettlementCompletedAt = attempt.SettlementCompletedAt;
         await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task UpdateReconciliationDiagnosticAsync(
+        FlowPaymentAttempt attempt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.PaymentAttempts
+            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(a => a.LastReconciledAt, attempt.LastReconciledAt)
+                .SetProperty(a => a.ProviderStatus, attempt.ProviderStatus)
+                .SetProperty(a => a.RiskStatus, attempt.RiskStatus)
+                .SetProperty(a => a.Error, attempt.Error), cancellationToken);
+    }
+
+    public async Task UpdateReconciliationTerminalAsync(
+        FlowPaymentAttempt attempt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.PaymentAttempts
+            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(a => a.State, attempt.State)
+                .SetProperty(a => a.LastReconciledAt, attempt.LastReconciledAt)
+                .SetProperty(a => a.ProviderStatus, attempt.ProviderStatus)
+                .SetProperty(a => a.RiskStatus, attempt.RiskStatus)
+                .SetProperty(a => a.Error, attempt.Error), cancellationToken);
     }
 
     public async Task<bool> ReserveSettlementAsync(
@@ -94,34 +127,39 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var persisted = await context.PaymentAttempts.SingleAsync(a => a.Id == attempt.Id, cancellationToken);
-        if (persisted.State != FlowAttemptState.Created)
-            return false;
-        if (persisted.SettlementTransactionId is not null &&
-            (!string.Equals(persisted.SettlementTransactionId, attempt.SettlementTransactionId, StringComparison.Ordinal) ||
-             !string.Equals(persisted.SettlementAmountAtomic, attempt.SettlementAmountAtomic, StringComparison.Ordinal) ||
-             persisted.SettlementAmount != attempt.SettlementAmount))
-            return false;
+        var updated = await context.PaymentAttempts
+            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created &&
+                (a.SettlementTransactionId == null || a.SettlementTransactionId == attempt.SettlementTransactionId) &&
+                (a.SettlementAmountAtomic == null || a.SettlementAmountAtomic == attempt.SettlementAmountAtomic) &&
+                (a.SettlementAmount == null || a.SettlementAmount == attempt.SettlementAmount))
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(a => a.LastReconciledAt, attempt.LastReconciledAt)
+                .SetProperty(a => a.ProviderStatus, attempt.ProviderStatus)
+                .SetProperty(a => a.RiskStatus, attempt.RiskStatus)
+                .SetProperty(a => a.Error, attempt.Error)
+                .SetProperty(a => a.SettlementTransactionId, attempt.SettlementTransactionId)
+                .SetProperty(a => a.SettlementAmountAtomic, attempt.SettlementAmountAtomic)
+                .SetProperty(a => a.SettlementAmount, attempt.SettlementAmount)
+                .SetProperty(a => a.SettlementCompletedAt, attempt.SettlementCompletedAt), cancellationToken);
+        return updated == 1;
+    }
 
-        persisted.LastReconciledAt = attempt.LastReconciledAt;
-        persisted.ProviderStatus = attempt.ProviderStatus;
-        persisted.RiskStatus = attempt.RiskStatus;
-        persisted.Error = attempt.Error;
-        persisted.SettlementTransactionId = attempt.SettlementTransactionId;
-        persisted.SettlementAmountAtomic = attempt.SettlementAmountAtomic;
-        persisted.SettlementAmount = attempt.SettlementAmount;
-        persisted.SettlementCompletedAt = attempt.SettlementCompletedAt;
-        try
-        {
-            await context.SaveChangesAsync(cancellationToken);
-            return true;
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            // Another process reserved or completed this attempt. The next
-            // reconciliation re-reads that authoritative local reservation.
-            return false;
-        }
+    public async Task FinalizeSettlementAsync(
+        FlowPaymentAttempt attempt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        await context.PaymentAttempts
+            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created &&
+                a.SettlementTransactionId == attempt.SettlementTransactionId &&
+                a.SettlementAmountAtomic == attempt.SettlementAmountAtomic &&
+                a.SettlementAmount == attempt.SettlementAmount)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(a => a.State, attempt.State)
+                .SetProperty(a => a.LastReconciledAt, attempt.LastReconciledAt)
+                .SetProperty(a => a.ProviderStatus, attempt.ProviderStatus)
+                .SetProperty(a => a.RiskStatus, attempt.RiskStatus)
+                .SetProperty(a => a.Error, attempt.Error), cancellationToken);
     }
 
     public async Task<bool> AddWebhookEventAsync(

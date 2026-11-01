@@ -77,7 +77,8 @@ public sealed class FlowReconciliationService(
         {
             ApiEndpoint = attempt.ApiEndpoint,
             EnvironmentId = attempt.EnvironmentId,
-            ApiCredential = config.ApiCredential
+            ApiCredential = config.ApiCredential,
+            WebhookSecret = config.WebhookSecret
         };
         FlowSnapshot snapshot;
         try
@@ -99,7 +100,7 @@ public sealed class FlowReconciliationService(
         if (bindingError is not null)
         {
             attempt.Error = bindingError;
-            await repository.UpdateAsync(attempt, cancellationToken);
+            await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
             return;
         }
         if (string.Equals(snapshot.Status, "cancelled", StringComparison.OrdinalIgnoreCase) ||
@@ -107,14 +108,14 @@ public sealed class FlowReconciliationService(
         {
             attempt.State = FlowAttemptState.Cancelled;
             attempt.Error = "Flow is cancelled; no settlement is accounted.";
-            await repository.UpdateAsync(attempt, cancellationToken);
+            await repository.UpdateReconciliationTerminalAsync(attempt, cancellationToken);
             return;
         }
         if (string.Equals(snapshot.Status, "failed", StringComparison.OrdinalIgnoreCase))
         {
             attempt.State = FlowAttemptState.Failed;
             attempt.Error = "Flow failed; no settlement is accounted.";
-            await repository.UpdateAsync(attempt, cancellationToken);
+            await repository.UpdateReconciliationTerminalAsync(attempt, cancellationToken);
             return;
         }
 
@@ -122,7 +123,7 @@ public sealed class FlowReconciliationService(
         if (error is not null || evidence is null)
         {
             attempt.Error = error;
-            await repository.UpdateAsync(attempt, cancellationToken);
+            await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
             return;
         }
 
@@ -146,7 +147,7 @@ public sealed class FlowReconciliationService(
         {
             attempt.Error = "BTCPay rejected or could not bind the settlement payment; no invoice credit was confirmed.";
         }
-        await repository.UpdateAsync(attempt, CancellationToken.None);
+        await repository.FinalizeSettlementAsync(attempt, CancellationToken.None);
     }
 
     private async Task SaveDiagnosticAsync(
@@ -156,7 +157,7 @@ public sealed class FlowReconciliationService(
     {
         attempt.LastReconciledAt = timeProvider.GetUtcNow();
         attempt.Error = FlowApiClient.Redact(error, string.Empty);
-        await repository.UpdateAsync(attempt, cancellationToken);
+        await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
     }
 
     private static string? ValidateBinding(FlowPaymentAttempt attempt, FlowSnapshot snapshot)

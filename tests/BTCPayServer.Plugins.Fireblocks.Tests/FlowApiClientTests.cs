@@ -50,6 +50,25 @@ public class FlowApiClientTests
         Assert.Equal(string.Empty, request.Body);
     }
 
+    [Theory]
+    [InlineData("""{"flow":{"id":"flow-123","settlement":{"transactionId":"\u0074est-flow-secret"}}}""")]
+    [InlineData("""{"flow":{"id":"flow-123","settlement":{"transactionId":"%74est-flow-secret"}}}""")]
+    public async Task ReconciliationRejectsEncodedCredentialInDecodedEvidence(string body)
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = Json(body)
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.GetFlowAsync(TestData.Config(), "flow-123"));
+
+        Assert.Contains("credential material", exception.Message);
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+    }
+
     [Fact]
     public async Task ProviderErrorIsClearAndCredentialIsRedacted()
     {

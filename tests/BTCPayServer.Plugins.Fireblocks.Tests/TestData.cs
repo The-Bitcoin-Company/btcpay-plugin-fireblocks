@@ -1,6 +1,7 @@
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Data;
 using BTCPayServer.Plugins.Fireblocks.Flow;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace BTCPayServer.Plugins.Fireblocks.Tests;
@@ -64,16 +65,25 @@ internal sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider
     public void Advance(TimeSpan duration) => Now += duration;
 }
 
-internal sealed class TestDbContextFactory(DbContextOptions<FireblocksDbContext> options)
-    : IDbContextFactory<FireblocksDbContext>
+internal sealed class TestDbContextFactory(
+    DbContextOptions<FireblocksDbContext> options,
+    SqliteConnection? ownedConnection = null) : IDbContextFactory<FireblocksDbContext>
 {
+    public SqliteConnection? OwnedConnection { get; } = ownedConnection;
+
     public FireblocksDbContext CreateDbContext() => new(options);
 
     public static TestDbContextFactory Create()
     {
+        // Conditional settlement updates require relational semantics; EF InMemory
+        // cannot model the PostgreSQL compare-and-set guarantees under test.
+        var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
         var options = new DbContextOptionsBuilder<FireblocksDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .UseSqlite(connection)
             .Options;
-        return new TestDbContextFactory(options);
+        using (var context = new FireblocksDbContext(options))
+            context.Database.EnsureCreated();
+        return new TestDbContextFactory(options, connection);
     }
 }

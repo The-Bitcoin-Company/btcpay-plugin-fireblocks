@@ -363,7 +363,7 @@ Run the live settlement exercise after `./dev/up.sh`:
 
 ```bash
 # Execution/risk rejection, invalid signature, duplicates, exact under/overpayment,
-# verified BTCPay invoice transitions, then missed-notification API recovery.
+# legacy-rate, existing-payment and BTCPay transitions, then missed-event recovery.
 python3 dev/exercise_flow_settlement.py
 # Skip the one-minute missed-notification check during short development loops.
 python3 dev/exercise_flow_settlement.py --skip-reconciliation
