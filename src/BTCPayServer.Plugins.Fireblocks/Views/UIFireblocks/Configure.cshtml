@@ -7,7 +7,7 @@
 <h2 class="mb-4">Fireblocks Flow</h2>
 <p class="text-muted mb-4">
     Create hosted Dynamic Flow payment links for USD invoices. Settlement is fixed to USDC on Solana.
-    This integration creates payment links only; it does not mark invoices paid from link visits or browser returns.
+    Invoices are credited only after authenticated notification or periodic reconciliation confirms completed settlement and acceptable risk.
 </p>
 
 <form method="post" asp-action="Configure" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
@@ -30,9 +30,22 @@
     <div class="form-group">
         <label asp-for="ApiCredential" class="form-label" data-required="@(!Model.HasApiCredential)"></label>
         <input asp-for="ApiCredential" type="password" class="form-control" autocomplete="new-password"
-               placeholder="@(Model.HasApiCredential ? "Leave blank to keep the saved token" : "Token with flow.write scope")" />
+               placeholder="@(Model.HasApiCredential ? "Leave blank to keep the saved token" : "Token with payment-link creation and Flow read access")" />
         <div class="form-text">Stored only in server-side store configuration and never returned to the browser or Greenfield responses.</div>
         <span asp-validation-for="ApiCredential" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="WebhookSecret" class="form-label" data-required="@(!Model.HasWebhookSecret)"></label>
+        <input asp-for="WebhookSecret" type="password" class="form-control" autocomplete="new-password"
+               placeholder="@(Model.HasWebhookSecret ? "Leave blank to keep the saved secret" : "Dynamic webhook signing secret")" />
+        <div class="form-text">Configure Dynamic to POST flow.execution.updated, flow.settlement.updated, and flow.risk.updated to <code>/stores/&lt;store-id&gt;/fireblocks/webhook</code>. The secret is never returned to browsers or API responses.</div>
+        <span asp-validation-for="WebhookSecret" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="AcceptedRiskStates" class="form-label" data-required></label>
+        <input asp-for="AcceptedRiskStates" class="form-control" autocomplete="off" />
+        <div class="form-text">Only these exact provider risk states permit payment accounting. The default is <code>approved</code>; review, holds, missing risk, and all other states remain unsettled.</div>
+        <span asp-validation-for="AcceptedRiskStates" class="text-danger"></span>
     </div>
     <div class="form-group">
         <label asp-for="HostedPaymentBaseUrl" class="form-label" data-required></label>

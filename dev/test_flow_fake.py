@@ -5,7 +5,15 @@ import base64
 import json
 import unittest
 
-from flow_fake import FakeRequestError, make_payment_url, validate_request
+from flow_fake import (
+    FakeRequestError,
+    apply_state,
+    make_payment_url,
+    make_snapshot,
+    validate_request,
+    webhook_body,
+    webhook_signature,
+)
 
 
 def valid_request() -> dict:
@@ -57,6 +65,25 @@ class FlowFakeTests(unittest.TestCase):
         del body["memo"]["paymentAttemptId"]
         with self.assertRaisesRegex(FakeRequestError, "correlation"):
             validate_request(body)
+
+    def test_authoritative_state_keeps_execution_settlement_and_risk_independent(self) -> None:
+        snapshot = make_snapshot("environment", "flow", valid_request())
+        apply_state(snapshot, {"executionStatus": "source_confirmed"})
+        self.assertEqual(snapshot["settlement"]["status"], "pending")
+
+        apply_state(snapshot, {"settlementStatus": "completed", "riskStatus": "review"})
+        self.assertEqual(snapshot["settlement"]["status"], "completed")
+        self.assertEqual(snapshot["risk"]["status"], "review")
+        self.assertEqual(snapshot["memo"]["paymentAttemptId"], "attempt")
+        self.assertEqual(snapshot["settlement"]["tokenDecimals"], 6)
+
+    def test_webhook_signature_covers_unmodified_compact_body(self) -> None:
+        snapshot = make_snapshot("environment", "flow", valid_request())
+        body = webhook_body("event", "flow.risk.updated", snapshot)
+        signature = webhook_signature(body, "test-secret")
+        self.assertTrue(signature.startswith("sha256="))
+        self.assertNotEqual(signature, webhook_signature(body + b" ", "test-secret"))
+        self.assertNotIn("test-secret", body.decode())
 
     def test_payment_url_contains_only_public_flow_correlation(self) -> None:
         url = make_payment_url("http://localhost:14143/pay", "environment", "flow")

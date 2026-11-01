@@ -18,7 +18,22 @@ public sealed class FireblocksPaymentPromptDetails
     public long? ProviderExpiresAt { get; init; }
 }
 
-public sealed class FireblocksPaymentDetails;
+public sealed class FireblocksPaymentDetails
+{
+    public string AttemptId { get; init; } = string.Empty;
+    public string FlowId { get; init; } = string.Empty;
+    public string TransactionId { get; init; } = string.Empty;
+    public string Asset { get; init; } = string.Empty;
+    public string Network { get; init; } = string.Empty;
+    public string ChainId { get; init; } = string.Empty;
+    public string TokenAddress { get; init; } = string.Empty;
+    public int TokenDecimals { get; init; }
+    public string Amount { get; init; } = string.Empty;
+    public string AmountAtomic { get; init; } = string.Empty;
+    public string Destination { get; init; } = string.Empty;
+    public decimal RequestedUsd { get; init; }
+    public long? SettlementCompletedAt { get; init; }
+}
 
 public sealed class FireblocksPaymentMethodHandler(
     IFlowPaymentService paymentService,
@@ -54,6 +69,12 @@ public sealed class FireblocksPaymentMethodHandler(
             throw new PaymentMethodUnavailableException("Fireblocks Flow currently supports only USD invoices.");
         if (context.InvoiceEntity.Price <= 0)
             throw new PaymentMethodUnavailableException("Fireblocks Flow requires a fixed, positive invoice amount.");
+        var hasUsdcRate = context.InvoiceEntity.TryGetRate(FireblocksStoreConfig.UsdcSymbol, out var usdcRate);
+        if (hasUsdcRate && usdcRate != 1m)
+            throw new PaymentMethodUnavailableException("Fireblocks Flow requires the fixed 1:1 USDC/USD accounting rate.");
+        if (!hasUsdcRate)
+            context.InvoiceEntity.AddRate(
+                new BTCPayServer.Rating.CurrencyPair(FireblocksStoreConfig.UsdcSymbol, "USD"), 1m);
 
         var config = ParsePaymentMethodConfig(context.PaymentMethodConfig);
         var errors = config.Validate(_allowLocalEndpoints);

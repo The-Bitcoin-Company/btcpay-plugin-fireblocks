@@ -12,6 +12,7 @@ public sealed class FireblocksDbContext(DbContextOptions<FireblocksDbContext> op
     }
 
     public DbSet<FlowPaymentAttempt> PaymentAttempts => Set<FlowPaymentAttempt>();
+    public DbSet<FlowWebhookEvent> WebhookEvents => Set<FlowWebhookEvent>();
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
@@ -43,6 +44,13 @@ public sealed class FireblocksDbContext(DbContextOptions<FireblocksDbContext> op
         attempt.Property(a => a.FlowId).HasColumnName("flow_id").HasMaxLength(128);
         attempt.Property(a => a.PaymentUrl).HasColumnName("payment_url").HasMaxLength(2048);
         attempt.Property(a => a.Error).HasColumnName("error").HasMaxLength(512);
+        attempt.Property(a => a.LastReconciledAt).HasColumnName("last_reconciled_at");
+        attempt.Property(a => a.ProviderStatus).HasColumnName("provider_status").HasMaxLength(64);
+        attempt.Property(a => a.RiskStatus).HasColumnName("risk_status").HasMaxLength(64);
+        attempt.Property(a => a.SettlementTransactionId).HasColumnName("settlement_transaction_id").HasMaxLength(128).IsConcurrencyToken();
+        attempt.Property(a => a.SettlementAmountAtomic).HasColumnName("settlement_amount_atomic").HasMaxLength(78);
+        attempt.Property(a => a.SettlementAmount).HasColumnName("settlement_amount").HasColumnType("numeric(38,18)");
+        attempt.Property(a => a.SettlementCompletedAt).HasColumnName("settlement_completed_at");
         attempt.HasIndex(a => new { a.StoreId, a.InvoiceId, a.AttemptNumber })
             .HasDatabaseName("ux_fireblocks_attempts_invoice_number")
             .IsUnique();
@@ -50,5 +58,17 @@ public sealed class FireblocksDbContext(DbContextOptions<FireblocksDbContext> op
             .HasDatabaseName("ix_fireblocks_attempts_flow_id")
             .IsUnique()
             .HasFilter("flow_id IS NOT NULL");
+
+        var webhook = modelBuilder.Entity<FlowWebhookEvent>();
+        webhook.ToTable("fireblocks_webhook_events");
+        webhook.HasKey(e => e.Id);
+        webhook.Property(e => e.Id).HasColumnName("id").HasMaxLength(128);
+        webhook.Property(e => e.StoreId).HasColumnName("store_id").HasMaxLength(100).IsRequired();
+        webhook.Property(e => e.EventType).HasColumnName("event_type").HasMaxLength(64).IsRequired();
+        webhook.Property(e => e.FlowId).HasColumnName("flow_id").HasMaxLength(128).IsRequired();
+        webhook.Property(e => e.ReceivedAt).HasColumnName("received_at");
+        webhook.Property(e => e.Payload).HasColumnName("payload").IsRequired();
+        webhook.HasIndex(e => new { e.StoreId, e.FlowId })
+            .HasDatabaseName("ix_fireblocks_webhooks_store_flow");
     }
 }

@@ -18,6 +18,14 @@ public sealed class FireblocksStoreConfigViewModel
 
     public bool HasApiCredential { get; set; }
 
+    [Display(Name = "Dynamic webhook signing secret")]
+    public string WebhookSecret { get; set; } = string.Empty;
+
+    public bool HasWebhookSecret { get; set; }
+
+    [Display(Name = "Acceptable settlement risk states (comma-separated)")]
+    public string AcceptedRiskStates { get; set; } = "approved";
+
     [Display(Name = "Hosted payment base URL")]
     public string HostedPaymentBaseUrl { get; set; } = FireblocksStoreConfig.DefaultHostedPaymentBaseUrl;
 

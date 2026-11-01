@@ -31,6 +31,133 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task ReconciliationUsesBoundServerFlowRead()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","environmentId":"env_test","status":"pending"}}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var snapshot = await client.GetFlowAsync(TestData.Config(), "flow-123");
+
+        Assert.Equal("flow-123", snapshot.Id);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("https://app.dynamic.test/api/v0/server/env_test/flows/flow-123", request.Uri);
+        Assert.Equal(TestData.Credential, request.Credential);
+        Assert.Equal(string.Empty, request.Body);
+    }
+
+    [Theory]
+    [InlineData("""{"flow":{"id":"flow-123","settlement":{"transactionId":"\u0074est-flow-secret"}}}""")]
+    [InlineData("""{"flow":{"id":"flow-123","settlement":{"transactionId":"%74est-flow-secret"}}}""")]
+    public async Task ReconciliationRejectsEncodedCredentialInDecodedEvidence(string body)
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = Json(body)
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() =>
+            client.GetFlowAsync(TestData.Config(), "flow-123"));
+
+        Assert.Contains("credential material", exception.Message);
+        Assert.DoesNotContain(TestData.Credential, exception.Message);
+    }
+
+    [Fact]
+    public async Task ReconciliationChecksDecodedStringsBeforeJsonCanReescapeThem()
+    {
+        var config = TestData.Config();
+        config.ApiCredential = "<test-flow-secret>";
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","settlement":{"transactionId":"\u003Ctest-flow-secret\u003E"}}}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.Contains("credential material", exception.Message);
+        Assert.DoesNotContain(config.ApiCredential, exception.Message);
+    }
+
+    [Fact]
+    public async Task ReconciliationErrorRedactsWebhookSecretBeforeDiagnostics()
+    {
+        var config = TestData.Config();
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json("""{"error":"bad \u0074est-webhook-secret"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.DoesNotContain(config.WebhookSecret, exception.Message);
+        Assert.Contains("[redacted]", exception.Message);
+    }
+
+    [Fact]
+    public async Task AllSecretsAreRedactedBeforeDiagnosticTruncation()
+    {
+        var config = TestData.Config();
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json($$"""{"error":"{{new string('x', 470)}}{{config.WebhookSecret}}"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.DoesNotContain(config.WebhookSecret, exception.Message);
+        Assert.DoesNotContain("test-webh", exception.Message);
+    }
+
+    [Fact]
+    public async Task OverlappingSecretsCannotLeakSuffixes()
+    {
+        var config = TestData.Config();
+        config.ApiCredential = "abcdefghijklmnop";
+        config.WebhookSecret = "abcdefghijklmnop-private-tail";
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json($$"""{"error":"bad {{config.WebhookSecret}}"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.Equal("Flow provider returned HTTP 400 ([redacted]).", exception.Message);
+        Assert.DoesNotContain("private-tail", exception.Message);
+    }
+
+    [Fact]
+    public async Task TransportErrorsSuppressOverlappingSecretsBeforeDownstreamDiagnostics()
+    {
+        var config = TestData.Config();
+        config.ApiCredential = "abcdefghijklmnop";
+        config.WebhookSecret = "abcdefghijklmnop-private-tail";
+        var handler = new StubHttpHandler((_, _) =>
+            throw new HttpRequestException($"bad {config.WebhookSecret}"));
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.Equal("[redacted]", exception.Message);
+        Assert.DoesNotContain("private-tail", exception.Message);
+    }
+
+    [Fact]
     public async Task ProviderErrorIsClearAndCredentialIsRedacted()
     {
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)

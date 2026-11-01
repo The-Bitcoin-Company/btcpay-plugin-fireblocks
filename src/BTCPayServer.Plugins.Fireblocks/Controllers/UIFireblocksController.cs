@@ -41,6 +41,8 @@ public sealed class UIFireblocksController(
             EnvironmentId = model.EnvironmentId,
             ApiEndpoint = model.ApiEndpoint,
             ApiCredential = model.ApiCredential,
+            WebhookSecret = model.WebhookSecret,
+            AcceptedRiskStates = model.AcceptedRiskStates,
             HostedPaymentBaseUrl = model.HostedPaymentBaseUrl,
             SolanaDestinationAddress = model.SolanaDestinationAddress,
             PaymentExpiryMinutes = model.PaymentExpiryMinutes
@@ -53,6 +55,8 @@ public sealed class UIFireblocksController(
         {
             model.ApiCredential = string.Empty;
             model.HasApiCredential = !string.IsNullOrEmpty(config.ApiCredential);
+            model.WebhookSecret = string.Empty;
+            model.HasWebhookSecret = !string.IsNullOrEmpty(config.WebhookSecret);
             return View(model);
         }
 
@@ -72,6 +76,9 @@ public sealed class UIFireblocksController(
         ApiEndpoint = config.ApiEndpoint,
         ApiCredential = string.Empty,
         HasApiCredential = !string.IsNullOrEmpty(config.ApiCredential),
+        WebhookSecret = string.Empty,
+        HasWebhookSecret = !string.IsNullOrEmpty(config.WebhookSecret),
+        AcceptedRiskStates = config.AcceptedRiskStates,
         HostedPaymentBaseUrl = config.HostedPaymentBaseUrl,
         SolanaDestinationAddress = config.SolanaDestinationAddress,
         PaymentExpiryMinutes = config.PaymentExpiryMinutes

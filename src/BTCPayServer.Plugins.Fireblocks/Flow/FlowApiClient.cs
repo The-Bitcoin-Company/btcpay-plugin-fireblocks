@@ -13,6 +13,11 @@ public interface IFlowApiClient
         FireblocksStoreConfig config,
         FlowPaymentLinkRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<FlowSnapshot> GetFlowAsync(
+        FireblocksStoreConfig config,
+        string flowId,
+        CancellationToken cancellationToken = default);
 }
 
 public class FlowApiException : Exception
@@ -111,7 +116,67 @@ public sealed partial class FlowApiClient(
         }
     }
 
-    private static string ReadProviderError(string body, string credential)
+    public async Task<FlowSnapshot> GetFlowAsync(
+        FireblocksStoreConfig config,
+        string flowId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(flowId);
+        var uri = $"{config.ApiEndpoint.TrimEnd('/')}/server/{Uri.EscapeDataString(config.EnvironmentId)}/flows/{Uri.EscapeDataString(flowId)}";
+        using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiCredential);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(_timeout);
+        string body;
+        HttpStatusCode statusCode;
+        try
+        {
+            using var response = await httpClient.SendAsync(message, timeoutSource.Token);
+            statusCode = response.StatusCode;
+            body = await response.Content.ReadAsStringAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new FlowApiException("The Flow provider did not respond to the reconciliation request in time.", uncertain: true);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new FlowApiException(
+                RedactSecrets($"Could not reach the Flow provider: {exception.Message}",
+                    config.ApiCredential, config.WebhookSecret),
+                uncertain: true);
+        }
+
+        if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
+            throw new FlowApiException(
+                RedactSecrets($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential, config.WebhookSecret)}.",
+                    config.ApiCredential, config.WebhookSecret),
+                uncertain: true,
+                statusCode);
+        if (!string.IsNullOrEmpty(config.ApiCredential) &&
+            body.Contains(config.ApiCredential, StringComparison.Ordinal))
+            throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
+
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            // Inspect each decoded string directly. Re-serialization could escape a
+            // credential again (for example '<' becoming '\\u003C').
+            if (ContainsCredential(json.RootElement, config.ApiCredential) ||
+                ContainsCredential(json.RootElement, config.WebhookSecret))
+                throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
+            var snapshot = json.RootElement.Deserialize<FlowStateResponse>(JsonOptions)?.Flow;
+            if (snapshot?.Id is not { Length: > 0 })
+                throw new FlowApiException("Flow provider returned an incomplete reconciliation response.", true);
+            return snapshot;
+        }
+        catch (JsonException)
+        {
+            throw new FlowApiException("Flow provider returned invalid reconciliation JSON.", true);
+        }
+    }
+
+    private static string ReadProviderError(string body, params string?[] credentials)
     {
         try
         {
@@ -124,8 +189,8 @@ public sealed partial class FlowApiClient(
                 codeElement.ValueKind == JsonValueKind.String ? codeElement.GetString() : null;
             var error = json.RootElement.TryGetProperty("error", out var errorElement) &&
                 errorElement.ValueKind == JsonValueKind.String ? errorElement.GetString() : null;
-            code = Redact(code, credential);
-            error = Redact(error, credential);
+            code = RedactSecrets(code, credentials);
+            error = RedactSecrets(error, credentials);
             if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(error))
                 return $" ({string.Join(": ", new[] { code, error }.Where(v => !string.IsNullOrWhiteSpace(v)))})";
         }
@@ -136,6 +201,32 @@ public sealed partial class FlowApiClient(
         }
 
         return " (unrecognized provider error response)";
+    }
+
+    private static bool ContainsCredential(JsonElement element, string credential)
+    {
+        if (string.IsNullOrEmpty(credential))
+            return false;
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => ContainsCredential(element.GetString(), credential),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsCredential(item, credential)),
+            JsonValueKind.Object => element.EnumerateObject().Any(property =>
+                ContainsCredential(property.Name, credential) || ContainsCredential(property.Value, credential)),
+            _ => false
+        };
+    }
+
+    public static string RedactSecrets(string? value, params string?[] secrets)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+        // Match every secret against the original detail before any replacement.
+        // If one secret prefixes another, replacement order must never expose a suffix.
+        if (secrets.Any(secret => ContainsCredential(value, secret ?? string.Empty)))
+            return "[redacted]";
+        var redacted = RedactCore(value, string.Empty, truncate: false);
+        return redacted.Length <= 512 ? redacted : redacted[..512];
     }
 
     private static bool ContainsCredential(string? value, string credential)
@@ -157,7 +248,10 @@ public sealed partial class FlowApiClient(
         }
     }
 
-    public static string Redact(string? value, string credential)
+    public static string Redact(string? value, string credential) =>
+        RedactCore(value, credential, truncate: true);
+
+    private static string RedactCore(string? value, string credential, bool truncate)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
@@ -169,7 +263,7 @@ public sealed partial class FlowApiClient(
         // remain after ordinary redaction, suppress the complete detail instead.
         if (ContainsCredential(redacted, credential))
             return "[redacted]";
-        return redacted.Length <= 512 ? redacted : redacted[..512];
+        return truncate && redacted.Length > 512 ? redacted[..512] : redacted;
     }
 
     [GeneratedRegex(@"(?i)(Bearer\s+)[^\s,;]+")]

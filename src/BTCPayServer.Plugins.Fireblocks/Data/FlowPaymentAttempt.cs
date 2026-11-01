@@ -5,7 +5,9 @@ public enum FlowAttemptState
     Creating = 0,
     Created = 1,
     Uncertain = 2,
-    Failed = 3
+    Failed = 3,
+    Settled = 4,
+    Cancelled = 5
 }
 
 public sealed class FlowPaymentAttempt
@@ -25,4 +27,11 @@ public sealed class FlowPaymentAttempt
     public string? FlowId { get; set; }
     public string? PaymentUrl { get; set; }
     public string? Error { get; set; }
+    public DateTimeOffset? LastReconciledAt { get; set; }
+    public string? ProviderStatus { get; set; }
+    public string? RiskStatus { get; set; }
+    public string? SettlementTransactionId { get; set; }
+    public string? SettlementAmountAtomic { get; set; }
+    public decimal? SettlementAmount { get; set; }
+    public DateTimeOffset? SettlementCompletedAt { get; set; }
 }

@@ -27,9 +27,18 @@ public sealed class FireblocksStoreConfig
     public string ApiCredential { get; set; } = string.Empty;
     public bool ShouldSerializeApiCredential() => false;
 
+    // Dynamic authenticates the exact webhook bytes with this independent secret.
+    // Like the API credential, it is write-only in Greenfield/UI responses.
+    public string WebhookSecret { get; set; } = string.Empty;
+    public bool ShouldSerializeWebhookSecret() => false;
+
     public string HostedPaymentBaseUrl { get; set; } = DefaultHostedPaymentBaseUrl;
     public string SolanaDestinationAddress { get; set; } = string.Empty;
     public int PaymentExpiryMinutes { get; set; } = 15;
+
+    // Comma-separated provider risk states which permit accounting. Matching is
+    // case-insensitive; an empty/missing provider risk state is never acceptable.
+    public string AcceptedRiskStates { get; set; } = "approved";
 
     public static FireblocksStoreConfig Parse(JToken token, JsonSerializer serializer) =>
         token.ToObject<FireblocksStoreConfig>(serializer)
@@ -39,6 +48,7 @@ public sealed class FireblocksStoreConfig
     {
         var token = JObject.FromObject(this, serializer);
         token[nameof(ApiCredential)] = ApiCredential;
+        token[nameof(WebhookSecret)] = WebhookSecret;
         return token;
     }
 
@@ -46,7 +56,14 @@ public sealed class FireblocksStoreConfig
     {
         if (string.IsNullOrWhiteSpace(ApiCredential) && previous is not null)
             ApiCredential = previous.ApiCredential;
+        if (string.IsNullOrWhiteSpace(WebhookSecret) && previous is not null)
+            WebhookSecret = previous.WebhookSecret;
     }
+
+    public IReadOnlySet<string> GetAcceptedRiskStates() =>
+        (AcceptedRiskStates ?? string.Empty)
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<FireblocksConfigurationError> Validate(bool allowLocalEndpoints = false)
     {
@@ -54,13 +71,21 @@ public sealed class FireblocksStoreConfig
         EnvironmentId = (EnvironmentId ?? string.Empty).Trim();
         ApiEndpoint = (ApiEndpoint ?? string.Empty).Trim();
         ApiCredential ??= string.Empty;
+        WebhookSecret ??= string.Empty;
+        AcceptedRiskStates = (AcceptedRiskStates ?? string.Empty).Trim();
         HostedPaymentBaseUrl = (HostedPaymentBaseUrl ?? string.Empty).Trim();
         SolanaDestinationAddress = (SolanaDestinationAddress ?? string.Empty).Trim();
 
         if (EnvironmentId.Length is 0 or > 200 || EnvironmentId.Any(char.IsWhiteSpace))
             errors.Add(new(nameof(EnvironmentId), "Enter a valid Dynamic environment ID."));
         if (string.IsNullOrWhiteSpace(ApiCredential))
-            errors.Add(new(nameof(ApiCredential), "Enter a server API token with the flow.write scope."));
+            errors.Add(new(nameof(ApiCredential), "Enter a server API token with payment-link creation and Flow read access."));
+        if (WebhookSecret.Length is < 16 or > 512)
+            errors.Add(new(nameof(WebhookSecret), "Enter a webhook signing secret between 16 and 512 characters."));
+        var riskStates = GetAcceptedRiskStates();
+        if (riskStates.Count == 0 || AcceptedRiskStates.Length > 512 ||
+            riskStates.Any(state => state.Length > 64 || state.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '_' and not '-')))
+            errors.Add(new(nameof(AcceptedRiskStates), "Enter comma-separated provider risk states using letters, digits, '_' or '-'."));
         ValidateEndpoint(ApiEndpoint, nameof(ApiEndpoint), "API endpoint", allowLocalEndpoints, errors);
         ValidateEndpoint(HostedPaymentBaseUrl, nameof(HostedPaymentBaseUrl), "Hosted payment base URL", allowLocalEndpoints, errors);
         if (!IsValidSolanaAddress(SolanaDestinationAddress))
