@@ -116,6 +116,7 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasColumnName("settlement_completed_at");
 
                     b.Property<string>("SettlementTransactionId")
+                        .IsConcurrencyToken()
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)")
                         .HasColumnName("settlement_transaction_id");

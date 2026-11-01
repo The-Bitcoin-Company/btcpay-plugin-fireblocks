@@ -47,7 +47,7 @@ public sealed class FireblocksDbContext(DbContextOptions<FireblocksDbContext> op
         attempt.Property(a => a.LastReconciledAt).HasColumnName("last_reconciled_at");
         attempt.Property(a => a.ProviderStatus).HasColumnName("provider_status").HasMaxLength(64);
         attempt.Property(a => a.RiskStatus).HasColumnName("risk_status").HasMaxLength(64);
-        attempt.Property(a => a.SettlementTransactionId).HasColumnName("settlement_transaction_id").HasMaxLength(128);
+        attempt.Property(a => a.SettlementTransactionId).HasColumnName("settlement_transaction_id").HasMaxLength(128).IsConcurrencyToken();
         attempt.Property(a => a.SettlementAmountAtomic).HasColumnName("settlement_amount_atomic").HasMaxLength(78);
         attempt.Property(a => a.SettlementAmount).HasColumnName("settlement_amount").HasColumnType("numeric(38,18)");
         attempt.Property(a => a.SettlementCompletedAt).HasColumnName("settlement_completed_at");

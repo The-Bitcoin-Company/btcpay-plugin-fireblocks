@@ -10,6 +10,7 @@ public interface IFlowPaymentAttemptRepository
     Task<IReadOnlyList<FlowPaymentAttempt>> ListOutstandingAsync(int limit, CancellationToken cancellationToken = default);
     Task AddAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task UpdateAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
+    Task<bool> ReserveSettlementAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task<bool> AddWebhookEventAsync(FlowWebhookEvent webhookEvent, CancellationToken cancellationToken = default);
 }
 
@@ -86,6 +87,41 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         persisted.SettlementAmount = attempt.SettlementAmount;
         persisted.SettlementCompletedAt = attempt.SettlementCompletedAt;
         await context.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<bool> ReserveSettlementAsync(
+        FlowPaymentAttempt attempt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        var persisted = await context.PaymentAttempts.SingleAsync(a => a.Id == attempt.Id, cancellationToken);
+        if (persisted.State != FlowAttemptState.Created)
+            return false;
+        if (persisted.SettlementTransactionId is not null &&
+            (!string.Equals(persisted.SettlementTransactionId, attempt.SettlementTransactionId, StringComparison.Ordinal) ||
+             !string.Equals(persisted.SettlementAmountAtomic, attempt.SettlementAmountAtomic, StringComparison.Ordinal) ||
+             persisted.SettlementAmount != attempt.SettlementAmount))
+            return false;
+
+        persisted.LastReconciledAt = attempt.LastReconciledAt;
+        persisted.ProviderStatus = attempt.ProviderStatus;
+        persisted.RiskStatus = attempt.RiskStatus;
+        persisted.Error = attempt.Error;
+        persisted.SettlementTransactionId = attempt.SettlementTransactionId;
+        persisted.SettlementAmountAtomic = attempt.SettlementAmountAtomic;
+        persisted.SettlementAmount = attempt.SettlementAmount;
+        persisted.SettlementCompletedAt = attempt.SettlementCompletedAt;
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Another process reserved or completed this attempt. The next
+            // reconciliation re-reads that authoritative local reservation.
+            return false;
+        }
     }
 
     public async Task<bool> AddWebhookEventAsync(

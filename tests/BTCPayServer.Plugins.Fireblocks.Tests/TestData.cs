@@ -32,14 +32,18 @@ internal sealed class FakeFlowApiClient : IFlowApiClient
     public void Throws(FlowApiException exception) => _responses.Enqueue(_ => Task.FromException<FlowPaymentLink>(exception));
 
     public Func<string, Task<FlowSnapshot>>? FlowHandler { get; set; }
+    public List<string> FlowRequests { get; } = [];
 
     public Task<FlowSnapshot> GetFlowAsync(
         FireblocksStoreConfig config,
         string flowId,
-        CancellationToken cancellationToken = default) =>
-        FlowHandler is null
+        CancellationToken cancellationToken = default)
+    {
+        FlowRequests.Add(flowId);
+        return FlowHandler is null
             ? throw new InvalidOperationException("No fake Flow reconciliation response configured.")
             : FlowHandler(flowId);
+    }
 
     public Task<FlowPaymentLink> CreatePaymentLinkAsync(
         FireblocksStoreConfig config,
