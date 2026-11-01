@@ -142,7 +142,8 @@ public sealed partial class FlowApiClient(
         catch (HttpRequestException exception)
         {
             throw new FlowApiException(
-                Redact($"Could not reach the Flow provider: {exception.Message}", config.ApiCredential),
+                RedactSecrets($"Could not reach the Flow provider: {exception.Message}",
+                    config.ApiCredential, config.WebhookSecret),
                 uncertain: true);
         }
 

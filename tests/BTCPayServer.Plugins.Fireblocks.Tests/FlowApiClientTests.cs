@@ -141,6 +141,23 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task TransportErrorsSuppressOverlappingSecretsBeforeDownstreamDiagnostics()
+    {
+        var config = TestData.Config();
+        config.ApiCredential = "abcdefghijklmnop";
+        config.WebhookSecret = "abcdefghijklmnop-private-tail";
+        var handler = new StubHttpHandler((_, _) =>
+            throw new HttpRequestException($"bad {config.WebhookSecret}"));
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.Equal("[redacted]", exception.Message);
+        Assert.DoesNotContain("private-tail", exception.Message);
+    }
+
+    [Fact]
     public async Task ProviderErrorIsClearAndCredentialIsRedacted()
     {
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
