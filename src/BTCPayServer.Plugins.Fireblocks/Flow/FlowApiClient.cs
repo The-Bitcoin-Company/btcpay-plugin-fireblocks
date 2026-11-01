@@ -218,11 +218,13 @@ public sealed partial class FlowApiClient(
 
     public static string RedactSecrets(string? value, params string?[] secrets)
     {
-        var redacted = value;
-        foreach (var secret in secrets)
-            redacted = RedactCore(redacted, secret ?? string.Empty, truncate: false);
-        if (string.IsNullOrEmpty(redacted))
+        if (string.IsNullOrEmpty(value))
             return string.Empty;
+        // Match every secret against the original detail before any replacement.
+        // If one secret prefixes another, replacement order must never expose a suffix.
+        if (secrets.Any(secret => ContainsCredential(value, secret ?? string.Empty)))
+            return "[redacted]";
+        var redacted = RedactCore(value, string.Empty, truncate: false);
         return redacted.Length <= 512 ? redacted : redacted[..512];
     }
 
