@@ -197,6 +197,27 @@ public class FlowReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReservationConflictRecordsRetryTimestampAndDiagnostic()
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var repository = new FlowPaymentAttemptRepository(factory);
+        attempt.SettlementTransactionId = "tx-original";
+        attempt.SettlementAmountAtomic = "25000000";
+        attempt.SettlementAmount = 25m;
+        Assert.True(await repository.ReserveSettlementAsync(attempt));
+        var recorder = new FakePaymentRecorder();
+        var service = Service(factory, Client(Snapshot(attempt, transactionId: "tx-other")), recorder);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        Assert.Empty(recorder.Payments);
+        var persisted = await repository.GetByFlowIdAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Equal(Now, persisted!.LastReconciledAt);
+        Assert.Contains("reservation", persisted.Error);
+    }
+
+    [Fact]
     public void BtcPayPaymentRecordRetainsAssetEvidenceAndExactPrecision()
     {
         var handler = new FireblocksPaymentMethodHandler(null!);
@@ -234,6 +255,11 @@ public class FlowReconciliationServiceTests
         Assert.Equal(FireblocksStoreConfig.UsdcMint, details.TokenAddress);
         Assert.Equal(attempt.Id, details.AttemptId);
         Assert.Equal(attempt.FlowId, details.FlowId);
+        Assert.True(BtcPayFlowPaymentRecorder.IsMatchingPayment(payment, attempt, evidence, handler));
+        Assert.False(BtcPayFlowPaymentRecorder.IsMatchingPayment(
+            payment, Attempt("attempt-2", "flow-2"), evidence, handler));
+        Assert.False(BtcPayFlowPaymentRecorder.IsMatchingPayment(
+            payment, attempt, evidence with { AmountAtomic = "1", TokenAmount = 0.000001m }, handler));
     }
 
     private static FlowReconciliationService Service(

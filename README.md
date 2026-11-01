@@ -292,7 +292,9 @@ with its Dynamic event ID before any success response; duplicate IDs do not crea
 A webhook is only a wake-up. Every supported notification and every periodic pass fetches current state
 from `GET <api-endpoint>/server/<environment-id>/flows/<flow-id>` with the server API credential. The
 poller runs at BTCPay startup and every minute for created attempts with stored Flow IDs, so missed
-notifications and process restarts converge on provider state. Duplicate and out-of-order notifications
+notifications and process restarts converge on provider state. Startup also replays idempotent BTCPay
+invoice-evaluation requests for invoices with settled attempts, closing the crash window after payment
+insertion but before the original in-memory watcher notification completes. Duplicate and out-of-order notifications
 are safe because stale webhook transitions are never applied directly. Provider/API failures leave the
 attempt outstanding and are retried. Disabling checkout does not disable reconciliation of existing attempts.
 

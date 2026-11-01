@@ -95,6 +95,33 @@ public class FlowPaymentConcurrencyTests
         Assert.Null(persisted.Error);
     }
 
+    [Fact]
+    public async Task StaleTerminalUpdateCannotStrandReservedSettlement()
+    {
+        var factory = await RelationalFactory();
+        var repository = new FlowPaymentAttemptRepository(factory);
+        await repository.AddAsync(Attempt());
+        var reserved = await repository.GetByFlowIdAsync("store", "flow-1");
+        reserved!.SettlementTransactionId = "tx-settled";
+        reserved.SettlementAmountAtomic = "25000000";
+        reserved.SettlementAmount = 25m;
+        Assert.True(await repository.ReserveSettlementAsync(reserved));
+
+        var staleTerminal = await repository.GetByFlowIdAsync("store", "flow-1");
+        staleTerminal!.State = FlowAttemptState.Cancelled;
+        staleTerminal.Error = "stale cancellation";
+        await new FlowPaymentAttemptRepository(factory).UpdateReconciliationTerminalAsync(staleTerminal);
+        reserved.State = FlowAttemptState.Settled;
+        reserved.Error = null;
+        await repository.FinalizeSettlementAsync(reserved);
+
+        var persisted = await repository.GetByFlowIdAsync("store", "flow-1");
+        Assert.Equal(FlowAttemptState.Settled, persisted!.State);
+        Assert.Equal("tx-settled", persisted.SettlementTransactionId);
+        Assert.Null(persisted.Error);
+        Assert.Empty(await repository.ListOutstandingAsync(10));
+    }
+
     private static async Task<TestDbContextFactory> RelationalFactory()
     {
         var connection = new SqliteConnection("Data Source=:memory:");

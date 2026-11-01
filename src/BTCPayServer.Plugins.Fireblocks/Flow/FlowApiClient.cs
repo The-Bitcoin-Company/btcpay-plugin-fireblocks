@@ -148,7 +148,8 @@ public sealed partial class FlowApiClient(
 
         if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
             throw new FlowApiException(
-                Redact($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential)}.", config.ApiCredential),
+                RedactSecrets($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential)}.",
+                    config.ApiCredential, config.WebhookSecret),
                 uncertain: true,
                 statusCode);
         if (!string.IsNullOrEmpty(config.ApiCredential) &&
@@ -157,15 +158,15 @@ public sealed partial class FlowApiClient(
 
         try
         {
-            var snapshot = JsonSerializer.Deserialize<FlowStateResponse>(body, JsonOptions)?.Flow;
+            using var json = JsonDocument.Parse(body);
+            // Inspect each decoded string directly. Re-serialization could escape a
+            // credential again (for example '<' becoming '\\u003C').
+            if (ContainsCredential(json.RootElement, config.ApiCredential) ||
+                ContainsCredential(json.RootElement, config.WebhookSecret))
+                throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
+            var snapshot = json.RootElement.Deserialize<FlowStateResponse>(JsonOptions)?.Flow;
             if (snapshot?.Id is not { Length: > 0 })
                 throw new FlowApiException("Flow provider returned an incomplete reconciliation response.", true);
-            // Check decoded values as well as raw bytes. JSON/URI encoding must not
-            // smuggle credential material into transaction or settlement persistence.
-            var decoded = JsonSerializer.Serialize(snapshot, JsonOptions);
-            if (ContainsCredential(decoded, config.ApiCredential) ||
-                ContainsCredential(decoded, config.WebhookSecret))
-                throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
             return snapshot;
         }
         catch (JsonException)
@@ -199,6 +200,28 @@ public sealed partial class FlowApiClient(
         }
 
         return " (unrecognized provider error response)";
+    }
+
+    private static bool ContainsCredential(JsonElement element, string credential)
+    {
+        if (string.IsNullOrEmpty(credential))
+            return false;
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => ContainsCredential(element.GetString(), credential),
+            JsonValueKind.Array => element.EnumerateArray().Any(item => ContainsCredential(item, credential)),
+            JsonValueKind.Object => element.EnumerateObject().Any(property =>
+                ContainsCredential(property.Name, credential) || ContainsCredential(property.Value, credential)),
+            _ => false
+        };
+    }
+
+    public static string RedactSecrets(string? value, params string?[] secrets)
+    {
+        var redacted = value;
+        foreach (var secret in secrets)
+            redacted = Redact(redacted, secret ?? string.Empty);
+        return redacted ?? string.Empty;
     }
 
     private static bool ContainsCredential(string? value, string credential)

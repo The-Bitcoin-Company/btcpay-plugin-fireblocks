@@ -65,7 +65,7 @@ public sealed class BtcPayFlowPaymentRecorder(
             var refreshed = await invoiceRepository.GetInvoice(attempt.InvoiceId);
             var existing = refreshed?.GetPayments(false).SingleOrDefault(p =>
                 p.Id == evidence.TransactionId && p.PaymentMethodId == handler.PaymentMethodId);
-            if (existing is null)
+            if (existing is null || !IsMatchingPayment(existing, attempt, evidence, handler))
                 return FlowPaymentRecordResult.Conflict;
             // AddPayment may have committed before a crash prevented ReceivedPayment.
             // Wake the watcher idempotently so on-time accounting is reevaluated now.
@@ -77,6 +77,21 @@ public sealed class BtcPayFlowPaymentRecorder(
         if (updated is not null)
             eventAggregator.Publish(new InvoiceEvent(updated, InvoiceEvent.ReceivedPayment) { Payment = payment });
         return FlowPaymentRecordResult.Recorded;
+    }
+
+    public static bool IsMatchingPayment(
+        PaymentEntity payment,
+        FlowPaymentAttempt attempt,
+        FlowSettlementEvidence evidence,
+        FireblocksPaymentMethodHandler handler)
+    {
+        if (payment.Value != evidence.TokenAmount || payment.Destination != evidence.Destination)
+            return false;
+        var details = payment.GetDetails<FireblocksPaymentDetails>(handler);
+        return details.AttemptId == attempt.Id && details.FlowId == attempt.FlowId &&
+            details.TransactionId == evidence.TransactionId && details.AmountAtomic == evidence.AmountAtomic &&
+            details.Asset == FireblocksStoreConfig.UsdcSymbol && details.Network == FireblocksStoreConfig.SolanaChainName &&
+            details.TokenAddress == FireblocksStoreConfig.UsdcMint && details.TokenDecimals == FireblocksStoreConfig.UsdcDecimals;
     }
 
     private async Task<bool> EnsureUsdcRateAsync(string invoiceId)

@@ -67,7 +67,7 @@ public sealed class FlowReconciliationService(
         var config = await configurations.GetAsync(attempt.StoreId, cancellationToken);
         if (config is null || string.IsNullOrWhiteSpace(config.ApiCredential))
         {
-            await SaveDiagnosticAsync(attempt, "Flow store configuration is unavailable; settlement remains unaccounted.", cancellationToken);
+            await SaveDiagnosticAsync(attempt, "Flow store configuration is unavailable; settlement remains unaccounted.", null, cancellationToken);
             return;
         }
 
@@ -87,7 +87,7 @@ public sealed class FlowReconciliationService(
         }
         catch (FlowApiException exception)
         {
-            await SaveDiagnosticAsync(attempt, exception.Message, cancellationToken);
+            await SaveDiagnosticAsync(attempt, exception.Message, config, cancellationToken);
             return;
         }
 
@@ -135,7 +135,11 @@ public sealed class FlowReconciliationService(
         attempt.SettlementAmount = evidence.TokenAmount;
         attempt.SettlementCompletedAt = evidence.CompletedAt;
         if (!await repository.ReserveSettlementAsync(attempt, cancellationToken))
+        {
+            attempt.Error = "Settlement reservation conflicts with current evidence or terminal state; recovery remains scheduled.";
+            await repository.UpdateReconciliationDiagnosticAsync(attempt, CancellationToken.None);
             return;
+        }
 
         var result = await paymentRecorder.RecordAsync(attempt, evidence, cancellationToken);
         if (result is FlowPaymentRecordResult.Recorded or FlowPaymentRecordResult.AlreadyRecorded)
@@ -153,10 +157,11 @@ public sealed class FlowReconciliationService(
     private async Task SaveDiagnosticAsync(
         FlowPaymentAttempt attempt,
         string error,
+        FireblocksStoreConfig? config,
         CancellationToken cancellationToken)
     {
         attempt.LastReconciledAt = timeProvider.GetUtcNow();
-        attempt.Error = FlowApiClient.Redact(error, string.Empty);
+        attempt.Error = FlowApiClient.RedactSecrets(error, config?.ApiCredential, config?.WebhookSecret);
         await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
     }
 

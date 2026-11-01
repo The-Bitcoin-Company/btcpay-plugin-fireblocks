@@ -8,6 +8,7 @@ public interface IFlowPaymentAttemptRepository
     Task<FlowPaymentAttempt?> GetByFlowIdAsync(string storeId, string flowId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FlowPaymentAttempt>> ListAsync(string storeId, string invoiceId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FlowPaymentAttempt>> ListOutstandingAsync(int limit, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<string>> ListSettledInvoiceIdsAsync(CancellationToken cancellationToken = default);
     Task AddAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task UpdateAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
     Task UpdateReconciliationDiagnosticAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default);
@@ -59,15 +60,28 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
-        var outstanding = await context.PaymentAttempts.AsNoTracking()
-            .Where(a => a.FlowId != null && a.State == FlowAttemptState.Created)
-            .ToArrayAsync(cancellationToken);
-        // Sort after loading so relational test providers without DateTimeOffset
-        // ORDER BY support exercise the same fair reconciliation behavior.
-        return outstanding
+        var query = context.PaymentAttempts.AsNoTracking()
+            .Where(a => a.FlowId != null && a.State == FlowAttemptState.Created);
+        if (context.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+        {
+            // SQLite is a test-only provider and cannot ORDER BY DateTimeOffset.
+            var outstanding = await query.ToArrayAsync(cancellationToken);
+            return outstanding.OrderBy(a => a.LastReconciledAt ?? a.CreatedAt).Take(limit).ToArray();
+        }
+        return await query
             .OrderBy(a => a.LastReconciledAt ?? a.CreatedAt)
             .Take(limit)
-            .ToArray();
+            .ToArrayAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>> ListSettledInvoiceIdsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        return await context.PaymentAttempts.AsNoTracking()
+            .Where(a => a.State == FlowAttemptState.Settled)
+            .Select(a => a.InvoiceId)
+            .Distinct()
+            .ToArrayAsync(cancellationToken);
     }
 
     public async Task AddAsync(FlowPaymentAttempt attempt, CancellationToken cancellationToken = default)
@@ -113,7 +127,8 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
         await context.PaymentAttempts
-            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created)
+            .Where(a => a.Id == attempt.Id && a.State == FlowAttemptState.Created &&
+                a.SettlementTransactionId == null)
             .ExecuteUpdateAsync(update => update
                 .SetProperty(a => a.State, attempt.State)
                 .SetProperty(a => a.LastReconciledAt, attempt.LastReconciledAt)

@@ -42,6 +42,7 @@ public static class FireblocksServiceCollectionExtensions
         services.TryAddSingleton<IFlowWebhookService, FlowWebhookService>();
         services.TryAddSingleton<IFlowPaymentRecorder, BtcPayFlowPaymentRecorder>();
         services.TryAddSingleton<IFlowReconciliationService, FlowReconciliationService>();
+        services.TryAddSingleton<IFlowInvoiceRecoveryService, FlowInvoiceRecoveryService>();
         services.AddHostedService<FlowReconciliationHostedService>();
         services.TryAddSingleton<IFlowPaymentService, FlowPaymentService>();
         services.TryAddSingleton<IFlowInvoiceExpiryService, FlowInvoiceExpiryService>();

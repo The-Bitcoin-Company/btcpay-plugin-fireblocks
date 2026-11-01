@@ -151,14 +151,14 @@ def exercise_amount_policy(store_id: str) -> None:
     fake_request(under_flow, "state", completed_state("4.999999", "approved", f"tx-{under_flow}"))
     notify(store_id, under_flow, "flow.settlement.updated", f"settlement-{under_flow}")
     deadline = time.monotonic() + 25
-    while not flow_method(store_id, under_id).get("payments"):
+    while True:
+        under = invoice(store_id, under_id)
+        under_payments = flow_method(store_id, under_id).get("payments", [])
+        if under_payments and under["status"] == "New" and under.get("additionalStatus") == "PaidPartial":
+            break
         if time.monotonic() >= deadline:
-            raise RuntimeError(f"Underpayment was not recorded for {under_id}")
+            raise RuntimeError(f"Underpayment was not recorded/evaluated for {under_id}: {under}")
         time.sleep(2)
-    under = invoice(store_id, under_id)
-    under_payments = flow_method(store_id, under_id)["payments"]
-    if under["status"] != "New" or under.get("additionalStatus") != "PaidPartial":
-        raise RuntimeError(f"Underpayment unexpectedly completed the invoice: {under}")
     if len(under_payments) != 1 or Decimal(str(under_payments[0]["value"])) != Decimal("4.999999"):
         raise RuntimeError(f"Underpayment precision was not preserved: {under_payments}")
     print(f"Underpayment invoice {under_id}: exact partial payment without settlement")
@@ -201,12 +201,17 @@ def exercise_existing_payment_recovery(store_id: str) -> None:
     # Recreate the durable state of a crash after AddPayment but before the invoice
     # watcher ran: payment exists, invoice is unpaid, and the attempt is outstanding.
     run_sql(f"UPDATE \"Invoices\" SET \"Status\" = 'New', \"ExceptionStatus\" = 'None' WHERE \"Id\" = '{invoice_id}'")
-    run_sql(f"UPDATE \"Fireblocks\".fireblocks_payment_attempts SET state = 1, error = NULL WHERE invoice_id = '{invoice_id}'")
-    notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
-    wait_for_status(store_id, invoice_id, "Settled", 25)
+    # Keep the attempt Settled: startup repair, not another webhook, must replay the
+    # idempotent invoice evaluation after the in-memory notification was lost.
+    subprocess.run([
+        "docker", "compose", "-f", str(Path(__file__).parent / "docker-compose.yml"),
+        "restart", "btcpay",
+    ], check=True, capture_output=True, text=True)
+    wait_until_ready()
+    wait_for_status(store_id, invoice_id, "Settled", 35)
     if len(flow_method(store_id, invoice_id).get("payments", [])) != 1:
         raise RuntimeError(f"Existing-payment recovery duplicated payment for {invoice_id}")
-    print(f"Existing-payment invoice {invoice_id}: idempotent update woke BTCPay accounting")
+    print(f"Existing-payment invoice {invoice_id}: startup repair woke BTCPay accounting")
 
 
 def exercise_reconciliation(store_id: str) -> None:
