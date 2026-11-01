@@ -148,7 +148,7 @@ public sealed partial class FlowApiClient(
 
         if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
             throw new FlowApiException(
-                RedactSecrets($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential)}.",
+                RedactSecrets($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential, config.WebhookSecret)}.",
                     config.ApiCredential, config.WebhookSecret),
                 uncertain: true,
                 statusCode);
@@ -175,7 +175,7 @@ public sealed partial class FlowApiClient(
         }
     }
 
-    private static string ReadProviderError(string body, string credential)
+    private static string ReadProviderError(string body, params string?[] credentials)
     {
         try
         {
@@ -188,8 +188,8 @@ public sealed partial class FlowApiClient(
                 codeElement.ValueKind == JsonValueKind.String ? codeElement.GetString() : null;
             var error = json.RootElement.TryGetProperty("error", out var errorElement) &&
                 errorElement.ValueKind == JsonValueKind.String ? errorElement.GetString() : null;
-            code = Redact(code, credential);
-            error = Redact(error, credential);
+            code = RedactSecrets(code, credentials);
+            error = RedactSecrets(error, credentials);
             if (!string.IsNullOrWhiteSpace(code) || !string.IsNullOrWhiteSpace(error))
                 return $" ({string.Join(": ", new[] { code, error }.Where(v => !string.IsNullOrWhiteSpace(v)))})";
         }
@@ -220,8 +220,10 @@ public sealed partial class FlowApiClient(
     {
         var redacted = value;
         foreach (var secret in secrets)
-            redacted = Redact(redacted, secret ?? string.Empty);
-        return redacted ?? string.Empty;
+            redacted = RedactCore(redacted, secret ?? string.Empty, truncate: false);
+        if (string.IsNullOrEmpty(redacted))
+            return string.Empty;
+        return redacted.Length <= 512 ? redacted : redacted[..512];
     }
 
     private static bool ContainsCredential(string? value, string credential)
@@ -243,7 +245,10 @@ public sealed partial class FlowApiClient(
         }
     }
 
-    public static string Redact(string? value, string credential)
+    public static string Redact(string? value, string credential) =>
+        RedactCore(value, credential, truncate: true);
+
+    private static string RedactCore(string? value, string credential, bool truncate)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
@@ -255,7 +260,7 @@ public sealed partial class FlowApiClient(
         // remain after ordinary redaction, suppress the complete detail instead.
         if (ContainsCredential(redacted, credential))
             return "[redacted]";
-        return redacted.Length <= 512 ? redacted : redacted[..512];
+        return truncate && redacted.Length > 512 ? redacted[..512] : redacted;
     }
 
     [GeneratedRegex(@"(?i)(Bearer\s+)[^\s,;]+")]

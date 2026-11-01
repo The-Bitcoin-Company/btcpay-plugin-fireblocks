@@ -109,6 +109,9 @@ public sealed class FlowReconciliationService(
             attempt.State = FlowAttemptState.Cancelled;
             attempt.Error = "Flow is cancelled; no settlement is accounted.";
             await repository.UpdateReconciliationTerminalAsync(attempt, cancellationToken);
+            // If a reservation won the race, terminal transition is declined but
+            // the outstanding attempt must still rotate through polling fairly.
+            await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
             return;
         }
         if (string.Equals(snapshot.Status, "failed", StringComparison.OrdinalIgnoreCase))
@@ -116,6 +119,7 @@ public sealed class FlowReconciliationService(
             attempt.State = FlowAttemptState.Failed;
             attempt.Error = "Flow failed; no settlement is accounted.";
             await repository.UpdateReconciliationTerminalAsync(attempt, cancellationToken);
+            await repository.UpdateReconciliationDiagnosticAsync(attempt, cancellationToken);
             return;
         }
 

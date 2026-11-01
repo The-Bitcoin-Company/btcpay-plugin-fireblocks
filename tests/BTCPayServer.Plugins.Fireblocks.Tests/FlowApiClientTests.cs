@@ -105,6 +105,23 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task AllSecretsAreRedactedBeforeDiagnosticTruncation()
+    {
+        var config = TestData.Config();
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = Json($$"""{"error":"{{new string('x', 470)}}{{config.WebhookSecret}}"}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var exception = await Assert.ThrowsAsync<FlowApiException>(() => client.GetFlowAsync(config, "flow-123"));
+
+        Assert.DoesNotContain(config.WebhookSecret, exception.Message);
+        Assert.DoesNotContain("test-webh", exception.Message);
+    }
+
+    [Fact]
     public async Task ProviderErrorIsClearAndCredentialIsRedacted()
     {
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)

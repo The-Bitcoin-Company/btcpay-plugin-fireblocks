@@ -7,20 +7,28 @@ namespace BTCPayServer.Plugins.Fireblocks.Flow;
 public sealed class FlowReconciliationHostedService(
     IFlowReconciliationService reconciliation,
     IFlowInvoiceRecoveryService invoiceRecovery,
-    ILogger<FlowReconciliationHostedService> logger) : BackgroundService
+    ILogger<FlowReconciliationHostedService> logger,
+    TimeSpan? pollInterval = null) : BackgroundService
 {
+    private readonly TimeSpan _pollInterval = pollInterval ?? TimeSpan.FromMinutes(1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        try
-        {
-            await invoiceRecovery.RepairRecordedSettlementsAsync(stoppingToken);
-        }
-        catch (Exception) when (!stoppingToken.IsCancellationRequested)
-        {
-            logger.LogWarning("Startup invoice repair for recorded Flow settlements failed; ordinary reconciliation will continue");
-        }
+        var invoiceRepairCompleted = false;
         while (!stoppingToken.IsCancellationRequested)
         {
+            if (!invoiceRepairCompleted)
+            {
+                try
+                {
+                    await invoiceRecovery.RepairRecordedSettlementsAsync(stoppingToken);
+                    invoiceRepairCompleted = true;
+                }
+                catch (Exception) when (!stoppingToken.IsCancellationRequested)
+                {
+                    logger.LogWarning("Invoice repair for recorded Flow settlements failed and will be retried; ordinary reconciliation will continue");
+                }
+            }
             try
             {
                 await reconciliation.ReconcileOutstandingAsync(stoppingToken);
@@ -31,7 +39,7 @@ public sealed class FlowReconciliationHostedService(
             }
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                await Task.Delay(_pollInterval, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

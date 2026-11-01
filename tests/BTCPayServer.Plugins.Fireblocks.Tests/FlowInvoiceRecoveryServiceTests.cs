@@ -1,6 +1,7 @@
 using BTCPayServer.Events;
 using BTCPayServer.Plugins.Fireblocks.Data;
 using BTCPayServer.Plugins.Fireblocks.Flow;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace BTCPayServer.Plugins.Fireblocks.Tests;
@@ -25,6 +26,49 @@ public class FlowInvoiceRecoveryServiceTests
         Assert.Equal(2, repaired.Count);
         Assert.Contains("invoice-1", repaired);
         Assert.Contains("invoice-2", repaired);
+    }
+
+    [Fact]
+    public async Task HostedServiceRetriesInvoiceRepairUntilFirstSuccess()
+    {
+        var recovery = new RetryRecovery();
+        var hosted = new FlowReconciliationHostedService(
+            new NoopReconciliation(), recovery, NullLogger<FlowReconciliationHostedService>.Instance,
+            TimeSpan.FromMilliseconds(5));
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            await recovery.SecondAttempt.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(recovery.Calls >= 2);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class RetryRecovery : IFlowInvoiceRecoveryService
+    {
+        private int _calls;
+        public int Calls => _calls;
+        public TaskCompletionSource SecondAttempt { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task RepairRecordedSettlementsAsync(CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _calls);
+            if (call == 1)
+                throw new InvalidOperationException("transient database failure");
+            SecondAttempt.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoopReconciliation : IFlowReconciliationService
+    {
+        public Task ReconcileAsync(string storeId, string flowId, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public Task ReconcileOutstandingAsync(CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
     }
 
     private static FlowPaymentAttempt Attempt(string id, string invoiceId, int number) => new()

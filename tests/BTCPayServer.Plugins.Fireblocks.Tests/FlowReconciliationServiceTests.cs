@@ -197,6 +197,35 @@ public class FlowReconciliationServiceTests
     }
 
     [Fact]
+    public async Task ReservedTerminalResponseRotatesPollingAndCanStillFinalizeValidSettlement()
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var repository = new FlowPaymentAttemptRepository(factory);
+        attempt.SettlementTransactionId = "tx-1";
+        attempt.SettlementAmountAtomic = "25000000";
+        attempt.SettlementAmount = 25m;
+        Assert.True(await repository.ReserveSettlementAsync(attempt));
+        var snapshot = Snapshot(attempt, flowStatus: "cancelled");
+        var client = new FakeFlowApiClient { FlowHandler = _ => Task.FromResult(snapshot) };
+        var recorder = new FakePaymentRecorder();
+        var service = Service(factory, client, recorder);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        var reserved = await repository.GetByFlowIdAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Equal(FlowAttemptState.Created, reserved!.State);
+        Assert.Equal(Now, reserved.LastReconciledAt);
+        Assert.Equal("tx-1", reserved.SettlementTransactionId);
+
+        snapshot = Snapshot(attempt);
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Single(recorder.Payments);
+        Assert.Equal(FlowAttemptState.Settled,
+            (await repository.GetByFlowIdAsync(attempt.StoreId, attempt.FlowId!))!.State);
+    }
+
+    [Fact]
     public async Task ReservationConflictRecordsRetryTimestampAndDiagnostic()
     {
         var factory = TestDbContextFactory.Create();
