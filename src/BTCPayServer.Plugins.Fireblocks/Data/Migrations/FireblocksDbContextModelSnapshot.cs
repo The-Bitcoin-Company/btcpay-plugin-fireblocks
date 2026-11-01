@@ -69,6 +69,10 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("flow_id");
 
+                    b.Property<DateTimeOffset?>("LastReconciledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_reconciled_at");
+
                     b.Property<string>("InvoiceId")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -87,6 +91,34 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                     b.Property<decimal>("RequestedUsd")
                         .HasColumnType("numeric(38,18)")
                         .HasColumnName("requested_usd");
+
+                    b.Property<string>("ProviderStatus")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("provider_status");
+
+                    b.Property<string>("RiskStatus")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("risk_status");
+
+                    b.Property<decimal?>("SettlementAmount")
+                        .HasColumnType("numeric(38,18)")
+                        .HasColumnName("settlement_amount");
+
+                    b.Property<string>("SettlementAmountAtomic")
+                        .HasMaxLength(78)
+                        .HasColumnType("character varying(78)")
+                        .HasColumnName("settlement_amount_atomic");
+
+                    b.Property<DateTimeOffset?>("SettlementCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("settlement_completed_at");
+
+                    b.Property<string>("SettlementTransactionId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("settlement_transaction_id");
 
                     b.Property<int>("State")
                         .HasColumnType("integer")
@@ -110,6 +142,48 @@ namespace BTCPayServer.Plugins.Fireblocks.Data.Migrations
                         .HasDatabaseName("ux_fireblocks_attempts_invoice_number");
 
                     b.ToTable("fireblocks_payment_attempts", "Fireblocks");
+                });
+
+            modelBuilder.Entity("BTCPayServer.Plugins.Fireblocks.Data.FlowWebhookEvent", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("id");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("FlowId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("flow_id");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("StoreId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("store_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StoreId", "FlowId")
+                        .HasDatabaseName("ix_fireblocks_webhooks_store_flow");
+
+                    b.ToTable("fireblocks_webhook_events", "Fireblocks");
                 });
 #pragma warning restore 612, 618
         }

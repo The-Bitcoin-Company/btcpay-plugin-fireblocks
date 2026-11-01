@@ -14,6 +14,7 @@ internal static class TestData
         EnvironmentId = "env_test",
         ApiEndpoint = "https://app.dynamic.test/api/v0",
         ApiCredential = Credential,
+        WebhookSecret = "test-webhook-secret",
         HostedPaymentBaseUrl = "https://pay.dynamic.test",
         SolanaDestinationAddress = FireblocksStoreConfig.UsdcMint,
         PaymentExpiryMinutes = 15
