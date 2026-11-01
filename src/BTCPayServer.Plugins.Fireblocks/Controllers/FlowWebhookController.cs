@@ -14,6 +14,7 @@ public sealed class FlowWebhookController(IFlowWebhookService webhookService) : 
 
     [HttpPost]
     [Consumes("application/json")]
+    [IgnoreAntiforgeryToken] // Provider HMAC authentication replaces browser CSRF tokens.
     public async Task<IActionResult> Receive(string storeId, CancellationToken cancellationToken)
     {
         if (Request.ContentLength > MaximumBodyBytes)

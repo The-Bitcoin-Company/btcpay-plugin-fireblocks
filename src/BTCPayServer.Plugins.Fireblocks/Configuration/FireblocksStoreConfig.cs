@@ -79,7 +79,7 @@ public sealed class FireblocksStoreConfig
         if (EnvironmentId.Length is 0 or > 200 || EnvironmentId.Any(char.IsWhiteSpace))
             errors.Add(new(nameof(EnvironmentId), "Enter a valid Dynamic environment ID."));
         if (string.IsNullOrWhiteSpace(ApiCredential))
-            errors.Add(new(nameof(ApiCredential), "Enter a server API token with the flow.write scope."));
+            errors.Add(new(nameof(ApiCredential), "Enter a server API token with payment-link creation and Flow read access."));
         if (WebhookSecret.Length is < 16 or > 512)
             errors.Add(new(nameof(WebhookSecret), "Enter a webhook signing secret between 16 and 512 characters."));
         var riskStates = GetAcceptedRiskStates();

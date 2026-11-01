@@ -31,6 +31,26 @@ public class FlowApiClientTests
     }
 
     [Fact]
+    public async Task ReconciliationUsesBoundServerFlowRead()
+    {
+        var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = Json("""{"flow":{"id":"flow-123","environmentId":"env_test","status":"pending"}}""")
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new FlowApiClient(httpClient);
+
+        var snapshot = await client.GetFlowAsync(TestData.Config(), "flow-123");
+
+        Assert.Equal("flow-123", snapshot.Id);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("https://app.dynamic.test/api/v0/server/env_test/flows/flow-123", request.Uri);
+        Assert.Equal(TestData.Credential, request.Credential);
+        Assert.Equal(string.Empty, request.Body);
+    }
+
+    [Fact]
     public async Task ProviderErrorIsClearAndCredentialIsRedacted()
     {
         var handler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)

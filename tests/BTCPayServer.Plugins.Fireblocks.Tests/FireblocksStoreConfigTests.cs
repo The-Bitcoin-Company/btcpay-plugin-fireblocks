@@ -78,9 +78,11 @@ public class FireblocksStoreConfigTests
         var previous = TestData.Config();
         var update = TestData.Config();
         update.ApiCredential = "";
+        update.WebhookSecret = "";
 
         update.PreserveCredential(previous);
         Assert.Equal(TestData.Credential, update.ApiCredential);
+        Assert.Equal(previous.WebhookSecret, update.WebhookSecret);
         Assert.Empty(update.Validate());
 
         var storage = update.ToStorageToken(handler.Serializer);
@@ -88,7 +90,9 @@ public class FireblocksStoreConfigTests
         var parsed = FireblocksStoreConfig.Parse(storage, handler.Serializer);
         var apiJson = JObject.FromObject(parsed, handler.Serializer.ForAPI()).ToString();
         Assert.DoesNotContain(TestData.Credential, apiJson);
+        Assert.DoesNotContain(previous.WebhookSecret, apiJson);
         Assert.DoesNotContain("apiCredential", apiJson);
+        Assert.DoesNotContain("webhookSecret", apiJson);
     }
 
     [Fact]
@@ -119,6 +123,21 @@ public class FireblocksStoreConfigTests
         Assert.Contains(errors, e => e.Field == nameof(config.ApiCredential));
         Assert.Contains(errors, e => e.Field == nameof(config.HostedPaymentBaseUrl));
         Assert.Contains(errors, e => e.Field == nameof(config.SolanaDestinationAddress));
+    }
+
+    [Fact]
+    public void WebhookSecretAndRiskPolicyAreRequiredAndNormalized()
+    {
+        var config = TestData.Config();
+        config.WebhookSecret = "short";
+        config.AcceptedRiskStates = "approved, low-risk";
+
+        Assert.Contains(config.Validate(), e => e.Field == nameof(config.WebhookSecret));
+        Assert.True(config.GetAcceptedRiskStates().Contains("APPROVED"));
+        Assert.True(config.GetAcceptedRiskStates().Contains("low-risk"));
+        config.WebhookSecret = "a-secure-webhook-secret";
+        config.AcceptedRiskStates = "review, approved;unexpected";
+        Assert.Contains(config.Validate(), e => e.Field == nameof(config.AcceptedRiskStates));
     }
 
     [Fact]

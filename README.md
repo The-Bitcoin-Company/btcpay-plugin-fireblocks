@@ -1,6 +1,6 @@
 # BTCPay Server Fireblocks plugin
 
-Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, with store-scoped Dynamic configuration and USDC settlement on Solana. This release covers payment creation and checkout only: **it does not confirm settlement or mark invoices paid**.
+Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, reconciles authoritative Dynamic execution/settlement/risk state, and records verified USDC/Solana settlements through BTCPay's payment services. Execution progress and browser returns never mark an invoice paid.
 
 ## Prerequisites
 
@@ -228,8 +228,7 @@ After the full gate passes, the tag workflow creates a GitHub release and attach
 
 Verify downloads with `sha256sum --check SHA256SUMS`. Install the `.btcpay` file via a compatible
 BTCPay instance's **Server Settings → Plugins → Upload Plugin** and restart when prompted.
-The metadata and checksums are companion files, not separate plugins. Release packages contain the same payment-link integration; settlement processing remains a separate
-future change.
+The metadata and checksums are companion files, not separate plugins. Release packages contain the same payment-link, authenticated webhook, reconciliation, and BTCPay settlement integration.
 
 ## Fireblocks Flow configuration
 
@@ -238,8 +237,12 @@ endpoint for `FIREBLOCKS-FLOW`:
 
 - **Dynamic environment ID** and **Flow API endpoint** (production default:
   `https://app.dynamic.xyz/api/v0`).
-- **Server API token** with `flow.write` scope. It is used only by the server-side client. Blank UI
+- **Server API token** with payment-link creation and Flow read access. It is used only by the server-side client for creation and reconciliation. Blank UI
   updates retain the saved token; configuration responses omit the credential.
+- **Dynamic webhook signing secret**, an independent secret of 16–512 characters. Blank UI updates retain it;
+  configuration responses omit it. Configure one Dynamic webhook per store and use the endpoint and event types below.
+- **Acceptable settlement risk states**, a comma-separated, case-insensitive allowlist (default `approved`).
+  Missing risk, review/hold states, and every state outside this list remain unaccounted even if settlement is completed.
 - **Hosted payment base URL** (production default: `https://pay.dynamicauth.com`). Register its origin
   as an allowed CORS origin in Dynamic, as required by the payment-link API.
 - **Solana USDC destination address**, a valid base58 address. The request has exactly one settlement
@@ -261,28 +264,113 @@ local/provider expiries in the plugin's PostgreSQL schema. A unique invoice/atte
 prevents concurrent processes from issuing duplicate creation calls. Only definite pre-creation
 rejections can produce another attempt in this release, and failed-attempt history is preserved.
 Created links are never replaced merely because local or provider deadlines pass: the payer may already
-have broadcast a payment. Creating, uncertain, and created attempts therefore require explicit
-terminal-state reconciliation (outside this release) before another Flow should be created for that
-invoice. Checkout suppresses an expired or amount-mismatched link instead of renewing it unsafely.
+have broadcast a payment. Created attempts with a Flow ID are reconciled automatically; an uncertain creation
+without a Flow ID remains blocked rather than being retried blindly. Checkout suppresses an expired or
+amount-mismatched link instead of renewing it unsafely.
 
 The checkout displays only the hosted URL and public attempt metadata. Expired links, and links whose
 fixed amount no longer matches the invoice balance after another payment method is used, are suppressed
 instead of presenting a stale charge. There is no browser-return settlement endpoint, and opening a
-link does not add a BTCPay payment or change invoice state. Future
-settlement work must reconcile verified provider notifications or server-side Flow reads; it must not
-trust a browser return.
+link does not add a BTCPay payment or change invoice state.
+
+### Dynamic webhooks and reconciliation
+
+For each store, register this HTTPS URL in Dynamic, replacing `<store-id>` and the BTCPay origin:
+
+```text
+https://<btcpay-host>/stores/<store-id>/fireblocks/webhook
+```
+
+Subscribe only to `flow.execution.updated`, `flow.settlement.updated`, and `flow.risk.updated`.
+Dynamic must send `x-dynamic-signature-256` as the lowercase or uppercase hexadecimal HMAC-SHA256 of
+the **unmodified request body**, optionally prefixed with `sha256=`, using the store's webhook signing
+secret. Verification uses a constant-time comparison. The endpoint accepts at most 1 MiB, returns no
+provider details, and does not log signatures, secrets, or payloads. Invalid signatures and malformed or
+unsupported envelopes are rejected without a receipt or payment write. A valid supported event is saved
+with its Dynamic event ID before any success response; duplicate IDs do not create another receipt.
+
+A webhook is only a wake-up. Every supported notification and every periodic pass fetches current state
+from `GET <api-endpoint>/server/<environment-id>/flows/<flow-id>` with the server API credential. The
+poller runs at BTCPay startup and every minute for created attempts with stored Flow IDs, so missed
+notifications and process restarts converge on provider state. Duplicate and out-of-order notifications
+are safe because stale webhook transitions are never applied directly. Provider/API failures leave the
+attempt outstanding and are retried. Disabling checkout does not disable reconciliation of existing attempts.
+
+Before accounting, reconciliation requires all of the following from the authoritative response:
+
+- exact store/invoice/attempt/Flow binding, environment, payment mode, and memo correlation;
+- settlement and destination configuration identical to the immutable creation request;
+- Solana `SOL`/`101`, USDC symbol and mint, six decimals, and the original merchant destination;
+- settlement status `completed`, usable Solana transaction evidence, and a positive exact token amount;
+- a risk state in the store allowlist. `source_confirmed`, source-token transfers, execution completion,
+  and browser returns are not merchant settlement.
+
+One transaction and exact amount are reserved per attempt with a database concurrency check. A repeated
+settlement uses BTCPay's payment primary key for idempotence; changed evidence cannot add another payment
+to that attempt. Payments are inserted with `PaymentStatus.Settled` through BTCPay's `PaymentService`,
+followed by its normal received-payment event and invoice watcher. The plugin never performs a standalone
+manual mark-paid operation.
+
+BTCPay's payment row uses currency `USDC`, six-decimal divisibility, the exact token amount, merchant
+destination, and transaction ID. Its details retain the Flow/attempt IDs, Solana chain and mint, exact
+decimal and atomic token amounts, settlement timestamp, and requested USD separately. USDC is accounted
+at a fixed 1:1 USDC/USD policy; no exchange conversion is performed.
+
+| Situation | Behavior |
+| --- | --- |
+| Partial/underpayment | Record the exact completed settlement; BTCPay keeps the invoice underpaid/partial. A later distinct attempt can contribute its own verified payment. |
+| Overpayment | Record the full exact amount; BTCPay applies its normal overpaid exception/status behavior. |
+| Expired link/late settlement | Do not discard authoritative funds evidence. BTCPay applies its normal late-payment behavior rather than treating execution time as settlement. |
+| Multiple attempts | Reconcile each stored Flow binding independently; each distinct verified transaction can be a payment, subject to BTCPay idempotence. |
+| Risk review/hold | Keep the attempt outstanding without a payment; a later authoritative acceptable risk state can settle it. |
+| Failed/cancelled Flow | Do not record a payment even if stale or contradictory webhook data claims execution/settlement progress. |
+| Duplicate/out-of-order event | Deduplicate the receipt and read current provider state; never replay webhook transitions. |
+
+### Operational diagnostics
+
+Inspect redacted attempt state, provider/risk status, last reconciliation, reservation, and exact amount:
+
+```bash
+docker compose -f dev/docker-compose.yml exec -T postgres psql -U postgres -d btcpayserver \
+  -c 'SELECT invoice_id, attempt_number, state, flow_id, requested_usd, provider_status, risk_status, last_reconciled_at, settlement_transaction_id, settlement_amount, settlement_amount_atomic, error FROM "Fireblocks".fireblocks_payment_attempts ORDER BY created_at;'
+```
+
+Authenticated webhook receipts are in `"Fireblocks".fireblocks_webhook_events` (`id`, `store_id`,
+`event_type`, `flow_id`, `received_at`, `payload`). Treat payloads as provider-sensitive operational data.
+BTCPay payment details contain the corresponding transaction/asset evidence. Application logs emit only
+store/invoice/Flow correlation and generic retry diagnostics, not provider response bodies or credentials.
+No UI currently exposes these plugin tables; use database access and normal BTCPay invoice/payment views.
+
+The unit matrix and disposable live exercise cover the integration contract, but a happy-path fake is not
+proof of production readiness. Before real funds, verify the deployed Dynamic payload/read schemas,
+credential scopes, webhook TLS/secret delivery, risk-state vocabulary, invoice expiry/risk policy, database
+backup/migration, monitoring, and operational runbooks against the actual provider environment.
 
 ### Local fake provider and failure modes
 
-`./dev/up.sh` starts `flow-fake` on loopback port `14143` and seeds a development-only token. The fake
-validates the same USD/USDC-Solana/expiry/correlation request shape and returns deterministic hosted
-links. Restarting BTCPay preserves the invoice/attempt/Flow binding. To inspect the persisted attempts,
-query the disposable database:
+`./dev/up.sh` starts `flow-fake` on loopback port `14143` and seeds development-only API/webhook secrets.
+The fake validates the same USD/USDC-Solana/expiry/correlation request shape, returns hosted links, serves
+authoritative Flow state, and can send signed execution/settlement/risk notifications. Restarting BTCPay
+preserves the invoice/attempt/Flow binding. Restarting only the fake clears its in-memory provider state,
+which intentionally leaves old attempts with retryable not-found diagnostics. To inspect attempts directly:
 
 ```bash
 docker compose -f dev/docker-compose.yml exec -T postgres psql -U postgres -d btcpayserver \
   -c 'SELECT invoice_id, attempt_number, state, flow_id, requested_usd, expires_at, provider_expires_at, api_endpoint, environment_id FROM "Fireblocks".fireblocks_payment_attempts;'
 ```
+
+Run the live settlement exercise after `./dev/up.sh`:
+
+```bash
+# Execution/risk rejection, invalid signature, duplicates, exact under/overpayment,
+# verified BTCPay invoice transitions, then missed-notification API recovery.
+python3 dev/exercise_flow_settlement.py
+# Skip the one-minute missed-notification check during short development loops.
+python3 dev/exercise_flow_settlement.py --skip-reconciliation
+```
+
+The script is a development integration check, not a substitute for the unit policy matrix or provider
+acceptance testing. Its control endpoints exist only in the disposable fake and are not plugin endpoints.
 
 Exercise provider rejection or a delayed response by setting the fake mode before startup:
 

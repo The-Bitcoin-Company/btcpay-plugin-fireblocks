@@ -30,7 +30,7 @@
     <div class="form-group">
         <label asp-for="ApiCredential" class="form-label" data-required="@(!Model.HasApiCredential)"></label>
         <input asp-for="ApiCredential" type="password" class="form-control" autocomplete="new-password"
-               placeholder="@(Model.HasApiCredential ? "Leave blank to keep the saved token" : "Token with flow.write scope")" />
+               placeholder="@(Model.HasApiCredential ? "Leave blank to keep the saved token" : "Token with payment-link creation and Flow read access")" />
         <div class="form-text">Stored only in server-side store configuration and never returned to the browser or Greenfield responses.</div>
         <span asp-validation-for="ApiCredential" class="text-danger"></span>
     </div>
