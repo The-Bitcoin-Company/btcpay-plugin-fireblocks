@@ -93,6 +93,9 @@ public sealed class FlowPaymentAttemptRepository(IDbContextFactory<FireblocksDbC
         CancellationToken cancellationToken = default)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken);
+        if (await context.WebhookEvents.AsNoTracking()
+            .AnyAsync(e => e.Id == webhookEvent.Id, cancellationToken))
+            return false;
         context.WebhookEvents.Add(webhookEvent);
         try
         {

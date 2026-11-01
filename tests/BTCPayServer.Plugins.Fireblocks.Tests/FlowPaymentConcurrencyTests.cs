@@ -44,6 +44,12 @@ public class FlowPaymentConcurrencyTests
         private int _callCount;
         public int CallCount => _callCount;
 
+        public Task<FlowSnapshot> GetFlowAsync(
+            FireblocksStoreConfig config,
+            string flowId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public async Task<FlowPaymentLink> CreatePaymentLinkAsync(
             FireblocksStoreConfig config,
             FlowPaymentLinkRequest request,

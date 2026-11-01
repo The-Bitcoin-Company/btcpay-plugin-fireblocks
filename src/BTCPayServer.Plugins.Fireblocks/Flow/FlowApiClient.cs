@@ -13,6 +13,11 @@ public interface IFlowApiClient
         FireblocksStoreConfig config,
         FlowPaymentLinkRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<FlowSnapshot> GetFlowAsync(
+        FireblocksStoreConfig config,
+        string flowId,
+        CancellationToken cancellationToken = default);
 }
 
 public class FlowApiException : Exception
@@ -108,6 +113,58 @@ public sealed partial class FlowApiClient(
         catch (JsonException)
         {
             throw new FlowApiException("Flow provider returned invalid JSON. The creation outcome is uncertain.", true);
+        }
+    }
+
+    public async Task<FlowSnapshot> GetFlowAsync(
+        FireblocksStoreConfig config,
+        string flowId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(flowId);
+        var uri = $"{config.ApiEndpoint.TrimEnd('/')}/server/{Uri.EscapeDataString(config.EnvironmentId)}/flows/{Uri.EscapeDataString(flowId)}";
+        using var message = new HttpRequestMessage(HttpMethod.Get, uri);
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiCredential);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(_timeout);
+        string body;
+        HttpStatusCode statusCode;
+        try
+        {
+            using var response = await httpClient.SendAsync(message, timeoutSource.Token);
+            statusCode = response.StatusCode;
+            body = await response.Content.ReadAsStringAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new FlowApiException("The Flow provider did not respond to the reconciliation request in time.", uncertain: true);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new FlowApiException(
+                Redact($"Could not reach the Flow provider: {exception.Message}", config.ApiCredential),
+                uncertain: true);
+        }
+
+        if (statusCode is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices)
+            throw new FlowApiException(
+                Redact($"Flow provider returned HTTP {(int)statusCode}{ReadProviderError(body, config.ApiCredential)}.", config.ApiCredential),
+                uncertain: true,
+                statusCode);
+        if (!string.IsNullOrEmpty(config.ApiCredential) &&
+            body.Contains(config.ApiCredential, StringComparison.Ordinal))
+            throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
+
+        try
+        {
+            var snapshot = JsonSerializer.Deserialize<FlowStateResponse>(body, JsonOptions)?.Flow;
+            if (snapshot?.Id is not { Length: > 0 })
+                throw new FlowApiException("Flow provider returned an incomplete reconciliation response.", true);
+            return snapshot;
+        }
+        catch (JsonException)
+        {
+            throw new FlowApiException("Flow provider returned invalid reconciliation JSON.", true);
         }
     }
 
