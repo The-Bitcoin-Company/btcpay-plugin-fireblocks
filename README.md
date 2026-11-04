@@ -1,6 +1,10 @@
 # BTCPay Server Fireblocks plugin
 
-Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, reconciles authoritative Dynamic execution/settlement/risk state, and records verified USDC/Solana settlements through BTCPay's payment services. Execution progress and browser returns never mark an invoice paid.
+Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, reconciles Dynamic execution/settlement/risk state, and records USDC/Solana settlements through BTCPay's payment services. Execution progress and browser returns never mark an invoice paid.
+
+**Provider verification:** the integration now follows Dynamic's published v0 contract. Tenant interactions
+and Solana finality guarantees remain unverified; this is not real-value acceptance. See the
+[provider evidence, open questions, and unscheduled acceptance checklist](docs/dynamic-provider-contract.md).
 
 ## Prerequisites
 
@@ -237,12 +241,15 @@ endpoint for `FIREBLOCKS-FLOW`:
 
 - **Dynamic environment ID** and **Flow API endpoint** (production default:
   `https://app.dynamic.xyz/api/v0`).
-- **Server API token** with payment-link creation and Flow read access. It is used only by the server-side client for creation and reconciliation. Blank UI
+- **Server API token** with `flow.write` permission (covers both payment-link creation and server Flow reads). It is used only by the server-side client for creation and reconciliation. Blank UI
   updates retain the saved token; configuration responses omit the credential.
 - **Dynamic webhook signing secret**, an independent secret of 16–512 characters. Blank UI updates retain it;
   configuration responses omit it. Configure one Dynamic webhook per store and use the endpoint and event types below.
-- **Acceptable settlement risk states**, a comma-separated, case-insensitive allowlist (default `approved`).
-  Missing risk, review/hold states, and every state outside this list remain unaccounted even if settlement is completed.
+- **Acceptable settlement risk states**, a comma-separated store allowlist (default `cleared`).
+  Accounting additionally requires the exact documented provider state `cleared`; adding unknown or unsafe
+  states cannot widen that rule. Existing stores using `approved` must explicitly change their policy.
+  Missing risk and every other state remain unaccounted even if settlement is completed. Dynamic marks
+  exchange/deposit-address sources cleared **without screening their funder**; review merchant compliance requirements.
 - **Hosted payment base URL** (production default: `https://pay.dynamicauth.com`). Register its origin
   as an allowed CORS origin in Dynamic, as required by the payment-link API.
 - **Solana USDC destination address**, a valid base58 address. The request has exactly one settlement
@@ -287,10 +294,11 @@ the **unmodified request body**, optionally prefixed with `sha256=`, using the s
 secret. Verification uses a constant-time comparison. The endpoint accepts at most 1 MiB, returns no
 provider details, and does not log signatures, secrets, or payloads. Invalid signatures and malformed or
 unsupported envelopes are rejected without a receipt or payment write. A valid supported event is saved
-with its Dynamic event ID before any success response; duplicate IDs do not create another receipt.
+with its Dynamic `eventId` before any success response; duplicate IDs do not create another receipt.
+The envelope uses `eventName`, top-level `environmentId`, and `data.flowId`, not `type` or delivery `messageId`.
 
 A webhook is only a wake-up. Every supported notification and every periodic pass fetches current state
-from `GET <api-endpoint>/server/<environment-id>/flows/<flow-id>` with the server API credential. The
+from `GET <api-endpoint>/server/<environment-id>/flow/<flow-id>` with the server API credential. The
 poller runs at BTCPay startup and every minute for created attempts with stored Flow IDs, so missed
 notifications and process restarts converge on provider state. Startup also replays idempotent BTCPay
 invoice-evaluation requests for invoices with settled attempts, retrying until the first repair pass
@@ -305,8 +313,13 @@ Before accounting, reconciliation requires all of the following from the authori
 - settlement and destination configuration identical to the immutable creation request;
 - Solana `SOL`/`101`, USDC symbol and mint, six decimals, and the original merchant destination;
 - settlement status `completed`, usable Solana transaction evidence, and a positive exact token amount;
-- a risk state in the store allowlist. `source_confirmed`, source-token transfers, execution completion,
-  and browser returns are not merchant settlement.
+- execution state `source_confirmed` and risk state exactly `cleared`, also permitted by the store allowlist.
+  `source_confirmed` alone, source-token transfers, execution completion, and browser returns are not merchant settlement.
+
+The server read is a bare Flow object. Delivered `settlement.amount` is an atomic-unit integer string;
+`25000000` is **25 USDC**, not 25 million USDC. Delivery identity is `settlementTxHash`, not source `txHash`.
+Missing required delivered amount, hash, asset metadata, or destination leaves the attempt unaccounted.
+The provider's `completed` state is not independent proof of Solana `finalized` commitment; see the open finality question.
 
 One transaction and exact amount are reserved per attempt with a database concurrency check. A repeated
 settlement uses BTCPay's payment primary key for idempotence; changed evidence cannot add another payment
@@ -321,7 +334,7 @@ at a fixed 1:1 USDC/USD policy; no exchange conversion is performed.
 
 | Situation | Behavior |
 | --- | --- |
-| Partial/underpayment | Record the exact completed settlement; BTCPay keeps the invoice underpaid/partial. A later distinct attempt can contribute its own verified payment. |
+| Defensive partial/underpayment handling | Record only exact completed settlement evidence; BTCPay applies partial accounting. Dynamic documents short payments as rejected in payment mode; fake short settlements test accounting defensively, not actual provider behavior. |
 | Overpayment | Record the full exact amount; BTCPay applies its normal overpaid exception/status behavior. |
 | Expired link/late settlement | Do not discard authoritative funds evidence. BTCPay applies its normal late-payment behavior rather than treating execution time as settlement. |
 | Multiple attempts | Reconcile each stored Flow binding independently; each distinct verified transaction can be a payment, subject to BTCPay idempotence. |

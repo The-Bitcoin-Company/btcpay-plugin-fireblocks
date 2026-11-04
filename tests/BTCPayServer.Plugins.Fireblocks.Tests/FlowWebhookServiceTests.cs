@@ -65,6 +65,21 @@ public class FlowWebhookServiceTests
     }
 
     [Fact]
+    public async Task WrongEnvironmentIsRejectedBeforePersistence()
+    {
+        var factory = TestDbContextFactory.Create();
+        var reconciliation = new FakeReconciliation();
+        var service = CreateService(factory, reconciliation);
+        var body = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Body("event-1")).Replace("env_test", "env_other"));
+
+        var exception = await Assert.ThrowsAsync<FlowWebhookException>(() => service.ProcessAsync("store", body, Sign(body)));
+
+        Assert.Equal(400, exception.StatusCode);
+        Assert.Empty(await Events(factory));
+        Assert.Equal(0, reconciliation.Count);
+    }
+
+    [Fact]
     public async Task ReconciliationFailureDoesNotLoseAcknowledgedEvent()
     {
         var factory = TestDbContextFactory.Create();
@@ -92,7 +107,7 @@ public class FlowWebhookServiceTests
     }
 
     private static byte[] Body(string eventId) => Encoding.UTF8.GetBytes(
-        $$$"""{"id":"{{{eventId}}}","type":"flow.settlement.updated","data":{"flowId":"flow-1","environmentId":"env_test"}}""");
+        $$$"""{"eventId":"{{{eventId}}}","eventName":"flow.settlement.updated","environmentId":"env_test","data":{"flowId":"flow-1"}}""");
 
     private static string Sign(ReadOnlySpan<byte> body) => "sha256=" + Convert.ToHexString(
         HMACSHA256.HashData(Encoding.UTF8.GetBytes(TestData.Config().WebhookSecret), body)).ToLowerInvariant();

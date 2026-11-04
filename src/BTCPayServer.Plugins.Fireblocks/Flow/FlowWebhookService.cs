@@ -80,9 +80,10 @@ public sealed class FlowWebhookService(
         {
             throw new FlowWebhookException(StatusCodes.Status400BadRequest);
         }
-        var eventId = envelope?.EventId ?? envelope?.Id;
-        var flowId = envelope?.Data?.FlowId ?? envelope?.Data?.Flow?.Id;
+        var eventId = envelope?.EventId;
+        var flowId = envelope?.Data?.FlowId;
         if (envelope?.Type is not { } eventType || !SupportedEvents.Contains(eventType) ||
+            !string.Equals(envelope.EnvironmentId, config.EnvironmentId, StringComparison.Ordinal) ||
             eventId is not { Length: > 0 and <= 128 } ||
             flowId is not { Length: > 0 and <= 128 })
             throw new FlowWebhookException(StatusCodes.Status400BadRequest);
@@ -118,14 +119,14 @@ public sealed class FlowWebhookService(
 
 public sealed class FlowWebhookEnvelope
 {
-    [JsonPropertyName("id")]
-    public string? Id { get; init; }
-
     [JsonPropertyName("eventId")]
     public string? EventId { get; init; }
 
-    [JsonPropertyName("type")]
+    [JsonPropertyName("eventName")]
     public string? Type { get; init; }
+
+    [JsonPropertyName("environmentId")]
+    public string? EnvironmentId { get; init; }
 
     [JsonPropertyName("data")]
     public FlowWebhookData? Data { get; init; }
@@ -136,15 +137,4 @@ public sealed class FlowWebhookData
     [JsonPropertyName("flowId")]
     public string? FlowId { get; init; }
 
-    [JsonPropertyName("environmentId")]
-    public string? EnvironmentId { get; init; }
-
-    [JsonPropertyName("flow")]
-    public FlowWebhookFlow? Flow { get; init; }
-}
-
-public sealed class FlowWebhookFlow
-{
-    [JsonPropertyName("id")]
-    public string? Id { get; init; }
 }

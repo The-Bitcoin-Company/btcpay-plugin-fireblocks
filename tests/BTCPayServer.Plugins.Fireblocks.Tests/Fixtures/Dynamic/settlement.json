@@ -1,0 +1,23 @@
+{
+  "eventId": "2a92c161-3167-44ad-8fce-4c6cdaed8129",
+  "messageId": "5a2a5360-bb7e-4ea6-9bd3-0146bf2f734f",
+  "webhookId": "a86acea4-e050-4846-8e4f-0ae039f6e37c",
+  "eventName": "flow.settlement.updated",
+  "environmentId": "123e4567-e89b-12d3-a456-426614174000",
+  "environmentName": "live",
+  "timestamp": "2026-06-15T12:00:00.000Z",
+  "data": {
+    "axis": "settlement",
+    "flowId": "7d2f1c8e-4b6a-4f0e-9a3d-5c1e2b8f6a90",
+    "previousState": "settling",
+    "newState": "completed",
+    "timestamp": "2026-06-15T12:00:00.000Z",
+    "additionalData": {
+      "chainName": "SOL", "chainId": "101",
+      "blockExplorerUrls": ["https://explorer.solana.com/tx/<settlement-transaction-signature>"],
+      "completedAt": "2026-06-15T12:00:00.000Z",
+      "settlementTxHash": "<settlement-transaction-signature>",
+      "settledAmount": {"amount": "25000000", "amountUsd": "25", "tokenInfo": {"symbol": "USDC", "decimals": 6}}
+    }
+  }
+}

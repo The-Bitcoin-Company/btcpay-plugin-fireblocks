@@ -1,0 +1,17 @@
+{
+  "eventId": "2a92c161-3167-44ad-8fce-4c6cdaed8129",
+  "messageId": "5a2a5360-bb7e-4ea6-9bd3-0146bf2f734f",
+  "webhookId": "a86acea4-e050-4846-8e4f-0ae039f6e37c",
+  "eventName": "flow.execution.updated",
+  "environmentId": "123e4567-e89b-12d3-a456-426614174000",
+  "environmentName": "live",
+  "timestamp": "2026-06-15T12:00:00.000Z",
+  "data": {
+    "axis": "execution",
+    "flowId": "7d2f1c8e-4b6a-4f0e-9a3d-5c1e2b8f6a90",
+    "previousState": "initiated",
+    "newState": "source_attached",
+    "timestamp": "2026-06-15T12:00:00.000Z",
+    "additionalData": {"fromAddress": "0x3FcE1F4F28DbA209344072867134A3a7F547C7f1", "fromChainId": "1", "sourceType": "wallet"}
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "eventId": "risk-event-example",
+  "messageId": "risk-delivery-example",
+  "eventName": "flow.risk.updated",
+  "environmentId": "123e4567-e89b-12d3-a456-426614174000",
+  "timestamp": "2026-06-15T12:00:00.000Z",
+  "data": {
+    "axis": "risk",
+    "flowId": "7d2f1c8e-4b6a-4f0e-9a3d-5c1e2b8f6a90",
+    "previousState": "unknown",
+    "newState": "cleared",
+    "timestamp": "2026-06-15T12:00:00.000Z"
+  }
+}

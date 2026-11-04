@@ -44,7 +44,7 @@
     <div class="form-group">
         <label asp-for="AcceptedRiskStates" class="form-label" data-required></label>
         <input asp-for="AcceptedRiskStates" class="form-control" autocomplete="off" />
-        <div class="form-text">Only these exact provider risk states permit payment accounting. The default is <code>approved</code>; review, holds, missing risk, and all other states remain unsettled.</div>
+        <div class="form-text">The default is <code>cleared</code>. Accounting always requires the exact provider state <code>cleared</code> and this policy must include it. Adding unknown, blocked, pending, or review states cannot authorize settlement. Cleared does not prove screening for exchange or deposit-address sources.</div>
         <span asp-validation-for="AcceptedRiskStates" class="text-danger"></span>
     </div>
     <div class="form-group">

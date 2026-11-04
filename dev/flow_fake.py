@@ -88,7 +88,7 @@ def make_snapshot(environment_id: str, flow_id: str, request: dict[str, Any]) ->
         "memo": request["memo"],
         "settlementConfig": request["settlementConfig"],
         "destinationConfig": request["destinationConfig"],
-        "execution": {"status": "created"},
+        "execution": {"status": "initiated"},
         "settlement": {
             "status": "pending",
             "amount": None,
@@ -138,12 +138,38 @@ def apply_state(snapshot: dict[str, Any], update: dict[str, Any]) -> None:
         )
 
 
+def server_response(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Expose Dynamic's v0 wire contract, not the fake's local control model."""
+    settlement = snapshot["settlement"]
+    result = {key: snapshot[key] for key in (
+        "id", "mode", "memo", "expiresAt", "settlementConfig", "destinationConfig"
+    )}
+    result.update({
+        "executionState": snapshot["execution"]["status"] if snapshot["status"] == "pending" else snapshot["status"],
+        "settlementState": settlement["status"],
+        "riskState": snapshot["risk"]["status"],
+        "settlementTxHash": settlement["transactionId"],
+        "toChainName": settlement["chainName"],
+    })
+    if settlement["status"] == "completed":
+        result["settlement"] = {
+            "amount": settlement["amountAtomic"],
+            "toAddress": settlement["destination"],
+            "toChainId": settlement["chainId"],
+            "toToken": settlement["tokenAddress"],
+            "toTokenInfo": {"symbol": settlement["symbol"], "decimals": settlement["tokenDecimals"]},
+            "completedAt": settlement["completedAt"],
+        }
+    return result
+
+
 def webhook_body(event_id: str, event_type: str, snapshot: dict[str, Any]) -> bytes:
     return json.dumps(
         {
-            "id": event_id,
-            "type": event_type,
-            "data": {"flowId": snapshot["id"], "environmentId": snapshot["environmentId"]},
+            "eventId": event_id,
+            "eventName": event_type,
+            "environmentId": snapshot["environmentId"],
+            "data": {"flowId": snapshot["id"]},
         },
         separators=(",", ":"),
     ).encode()
@@ -163,7 +189,7 @@ class FlowFakeHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self.send_json(200, {"ok": True})
             return
-        match = re.fullmatch(r"/api/v0/server/([^/]+)/flows/([^/]+)", self.path)
+        match = re.fullmatch(r"/api/v0/server/([^/]+)/flow/([^/]+)", self.path)
         if match is not None:
             if self.headers.get("Authorization") != f"Bearer {FAKE_CREDENTIAL}":
                 self.send_json(401, {"code": "unauthorized", "error": "invalid fake credential"})
@@ -173,7 +199,7 @@ class FlowFakeHandler(BaseHTTPRequestHandler):
                 if snapshot is None or snapshot["environmentId"] != match.group(1):
                     self.send_json(404, {"code": "not_found", "error": "flow not found"})
                     return
-                self.send_json(200, {"flow": snapshot})
+                self.send_json(200, server_response(snapshot))
                 return
         if self.path.startswith("/pay"):
             content = (
