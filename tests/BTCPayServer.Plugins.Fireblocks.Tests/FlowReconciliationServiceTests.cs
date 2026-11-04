@@ -158,6 +158,43 @@ public class FlowReconciliationServiceTests
         Assert.Empty(recorder.Payments);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("broadcasted")]
+    [InlineData("future_success")]
+    [InlineData("SOURCE_CONFIRMED")]
+    public async Task UnconfirmedOrUnknownExecutionCannotCredit(string? executionStatus)
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var recorder = new FakePaymentRecorder();
+        var client = Client(Snapshot(attempt, executionStatus: executionStatus));
+
+        await Service(factory, client, recorder).ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        Assert.Empty(recorder.Payments);
+    }
+
+    [Fact]
+    public async Task LegacyApprovedPolicyRequiresExplicitOptInToCleared()
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var config = TestData.Config();
+        config.AcceptedRiskStates = "approved";
+        var recorder = new FakePaymentRecorder();
+        var service = new FlowReconciliationService(new FlowPaymentAttemptRepository(factory),
+            new FakeConfigurations(config), Client(Snapshot(attempt, risk: "cleared")), recorder,
+            new FakeTimeProvider(Now), NullLogger<FlowReconciliationService>.Instance);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Empty(recorder.Payments);
+        config.AcceptedRiskStates = "cleared";
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Single(recorder.Payments);
+    }
+
     [Fact]
     public async Task AtomicAmountMustAgreeWithDecimalEvidence()
     {
@@ -392,7 +429,8 @@ public class FlowReconciliationServiceTests
         string? amount = "25.000000",
         string? atomic = "25000000",
         string transactionId = "tx-1",
-        DateTimeOffset? completedAt = null)
+        DateTimeOffset? completedAt = null,
+        string? executionStatus = "source_confirmed")
     {
         var config = TestData.Config();
         var request = FlowPaymentRequestFactory.Create(config, attempt.InvoiceId, attempt.Id, 25m, 900);
@@ -421,7 +459,7 @@ public class FlowReconciliationServiceTests
                 }
                 : request.SettlementConfig,
             DestinationConfig = request.DestinationConfig,
-            Execution = new FlowExecutionStatus { Status = "source_confirmed" },
+            Execution = new FlowExecutionStatus { Status = executionStatus },
             Settlement = new FlowSettlementStatus
             {
                 Status = settlementStatus,

@@ -5,11 +5,13 @@ import base64
 import json
 import unittest
 
+from exercise_flow_settlement import completed_state
 from flow_fake import (
     FakeRequestError,
     apply_state,
     make_payment_url,
     make_snapshot,
+    server_response,
     validate_request,
     webhook_body,
     webhook_signature,
@@ -69,13 +71,32 @@ class FlowFakeTests(unittest.TestCase):
     def test_authoritative_state_keeps_execution_settlement_and_risk_independent(self) -> None:
         snapshot = make_snapshot("environment", "flow", valid_request())
         apply_state(snapshot, {"executionStatus": "source_confirmed"})
-        self.assertEqual(snapshot["settlement"]["status"], "pending")
+        self.assertEqual(snapshot["settlement"]["status"], "none")
 
         apply_state(snapshot, {"settlementStatus": "completed", "riskStatus": "review"})
         self.assertEqual(snapshot["settlement"]["status"], "completed")
         self.assertEqual(snapshot["risk"]["status"], "review")
         self.assertEqual(snapshot["memo"]["paymentAttemptId"], "attempt")
         self.assertEqual(snapshot["settlement"]["tokenDecimals"], 6)
+
+    def test_server_wire_starts_without_settlement_and_completed_helper_proves_execution(self) -> None:
+        snapshot = make_snapshot("environment", "flow", valid_request())
+        wire = server_response(snapshot)
+        self.assertEqual(wire["executionState"], "initiated")
+        self.assertEqual(wire["settlementState"], "none")
+        self.assertNotIn("settlement", wire)
+        self.assertNotIn("flow", wire)
+        apply_state(snapshot, {"settlementStatus": "settling"})
+        self.assertEqual(server_response(snapshot)["settlementState"], "settling")
+        apply_state(snapshot, completed_state("4.999999", "cleared", "settlement-tx"))
+        wire = server_response(snapshot)
+        self.assertEqual(wire["executionState"], "source_confirmed")
+        self.assertEqual(wire["settlementState"], "completed")
+        self.assertEqual(wire["riskState"], "cleared")
+        self.assertEqual(wire["settlementTxHash"], "settlement-tx")
+        self.assertEqual(wire["settlement"]["amount"], "4999999")
+        self.assertEqual(wire["settlement"]["toTokenInfo"], {"symbol": "USDC", "decimals": 6})
+        self.assertEqual(wire["settlement"]["toAddress"], "destination")
 
     def test_webhook_signature_covers_unmodified_compact_body(self) -> None:
         snapshot = make_snapshot("environment", "flow", valid_request())

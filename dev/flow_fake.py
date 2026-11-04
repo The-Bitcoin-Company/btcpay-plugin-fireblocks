@@ -90,7 +90,7 @@ def make_snapshot(environment_id: str, flow_id: str, request: dict[str, Any]) ->
         "destinationConfig": request["destinationConfig"],
         "execution": {"status": "initiated"},
         "settlement": {
-            "status": "pending",
+            "status": "none",
             "amount": None,
             "amountAtomic": None,
             "transactionId": None,

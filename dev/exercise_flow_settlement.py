@@ -59,6 +59,7 @@ def notify(store_id: str, flow_id: str, event_type: str, event_id: str) -> None:
 
 def completed_state(amount: str, risk: str, transaction_id: str) -> dict:
     return {
+        "executionStatus": "source_confirmed",
         "settlementStatus": "completed",
         "riskStatus": risk,
         "amount": amount,
@@ -114,7 +115,7 @@ def exercise_webhook(store_id: str) -> None:
     invoice_id, flow_id = create_flow_invoice(store_id, f"flow-webhook-{int(time.time())}")
     fake_request(flow_id, "state", {
         "executionStatus": "source_confirmed",
-        "settlementStatus": "processing",
+        "settlementStatus": "settling",
         "riskStatus": "cleared",
     })
     notify(store_id, flow_id, "flow.execution.updated", f"execution-{flow_id}")
