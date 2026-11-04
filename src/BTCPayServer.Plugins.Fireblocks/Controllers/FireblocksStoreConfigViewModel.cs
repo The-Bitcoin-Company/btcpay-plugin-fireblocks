@@ -5,6 +5,9 @@ namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 
 public sealed class FireblocksStoreConfigViewModel
 {
+    public CoreApiSettings CoreApi { get; set; } = new();
+    public bool HasCoreApiKey { get; set; }
+    public bool HasCorePrivateKey { get; set; }
     public bool Enabled { get; set; } = true;
 
     [Display(Name = "Dynamic environment ID")]

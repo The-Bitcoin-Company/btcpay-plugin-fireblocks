@@ -4,7 +4,36 @@
     Layout = "_Layout";
 }
 
-<h2 class="mb-4">Fireblocks Flow</h2>
+<h2 class="mb-4">Core Fireblocks API</h2>
+<p>Read-only workspace connection, separate from Dynamic Flow. Sandbox does not enable testnet checkout. No vaults or transactions are created.</p>
+<form method="post" asp-action="ConfigureCore" asp-route-storeId="@Context.Request.RouteValues["storeId"]" autocomplete="off">
+    <div class="form-group">
+        <label asp-for="CoreApi.Environment" class="form-label">Workspace environment</label>
+        <select asp-for="CoreApi.Environment" class="form-select">
+            <option value="Sandbox">Sandbox — https://sandbox-api.fireblocks.io/v1</option>
+            <option value="US">US Mainnet/Testnet — https://api.fireblocks.io/v1</option>
+        </select>
+        <span asp-validation-for="CoreApi.Environment" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="CoreApi.ApiKey" class="form-label">Core workspace API key</label>
+        <input asp-for="CoreApi.ApiKey" type="password" class="form-control" autocomplete="new-password"
+               placeholder="@(Model.HasCoreApiKey ? "Leave blank to keep the saved key" : "Workspace API key")" />
+        <span asp-validation-for="CoreApi.ApiKey" class="text-danger"></span>
+    </div>
+    <div class="form-group">
+        <label asp-for="CoreApi.PrivateKey" class="form-label">RSA private key (PEM, write-only)</label>
+        <textarea asp-for="CoreApi.PrivateKey" class="form-control" rows="3" autocomplete="new-password"
+                  placeholder="@(Model.HasCorePrivateKey ? "Leave blank to keep the saved private key" : "Unencrypted RSA private key PEM")"></textarea>
+        <span asp-validation-for="CoreApi.PrivateKey" class="text-danger"></span>
+        <div class="form-text">Secrets are stored in server-side store configuration, not a secret manager. Protect the database and backups. Blank secrets retain saved values; replace both credentials when switching workspaces.</div>
+    </div>
+    <button type="submit" name="command" value="save" class="btn btn-primary">Save core settings</button>
+    <button type="submit" name="command" value="test" class="btn btn-secondary">Test connection</button>
+    <p class="form-text">Test uses the entered credentials (or saved values when blank), without saving them or moving funds.</p>
+</form>
+
+<h2 class="mb-4 mt-4">Fireblocks Flow</h2>
 <p class="text-muted mb-4">
     Create hosted Dynamic Flow payment links for USD invoices. Settlement is fixed to USDC on Solana.
     Invoices are credited only after authenticated notification or periodic reconciliation confirms completed settlement and acceptable risk.

@@ -3,6 +3,7 @@ using BTCPayServer.Abstractions.Models;
 using BTCPayServer.Client;
 using BTCPayServer.Data;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
+using BTCPayServer.Plugins.Fireblocks.Core;
 using BTCPayServer.Plugins.Fireblocks.Payments;
 using BTCPayServer.Services.Stores;
 using Microsoft.AspNetCore.Authorization;
@@ -18,16 +19,18 @@ namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 public sealed class UIFireblocksController(
     StoreRepository storeRepository,
     FireblocksPaymentMethodHandler handler,
-    IConfiguration configuration) : Controller
+    IConfiguration configuration,
+    CoreApiClient coreApiClient,
+    ICoreApiSettingsStore coreSettings) : Controller
 {
     private StoreData CurrentStore => HttpContext.GetStoreData();
 
     [HttpGet]
-    public IActionResult Configure()
+    public async Task<IActionResult> Configure()
     {
         var stored = CurrentStore.GetPaymentMethodConfig(handler.PaymentMethodId);
         var config = stored is null ? new FireblocksStoreConfig() : handler.ParsePaymentMethodConfig(stored);
-        return View(ToViewModel(config, CurrentStore));
+        return View(ToViewModel(config, CurrentStore, await coreSettings.Get(CurrentStore.Id)));
     }
 
     [HttpPost]
@@ -53,6 +56,14 @@ public sealed class UIFireblocksController(
 
         if (!ModelState.IsValid)
         {
+            ModelState.Remove("CoreApi.ApiKey");
+            ModelState.Remove("CoreApi.PrivateKey");
+            ModelState.Remove(nameof(model.ApiCredential));
+            ModelState.Remove(nameof(model.WebhookSecret));
+            var core = await coreSettings.Get(CurrentStore.Id);
+            model.CoreApi = new CoreApiSettings { Environment = core.Environment };
+            model.HasCoreApiKey = !string.IsNullOrEmpty(core.ApiKey);
+            model.HasCorePrivateKey = !string.IsNullOrEmpty(core.PrivateKey);
             model.ApiCredential = string.Empty;
             model.HasApiCredential = !string.IsNullOrEmpty(config.ApiCredential);
             model.WebhookSecret = string.Empty;
@@ -69,8 +80,43 @@ public sealed class UIFireblocksController(
         return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
     }
 
-    private static FireblocksStoreConfigViewModel ToViewModel(FireblocksStoreConfig config, StoreData store) => new()
+    [HttpPost("core")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfigureCore(FireblocksStoreConfigViewModel model, string command)
     {
+        var stored = CurrentStore.GetPaymentMethodConfig(handler.PaymentMethodId);
+        var config = stored is null ? new FireblocksStoreConfig() : handler.ParsePaymentMethodConfig(stored);
+        var previous = await coreSettings.Get(CurrentStore.Id);
+        model.CoreApi.PreserveSecrets(previous);
+        var errors = model.CoreApi.Validate(required: true);
+        // Never return posted credentials or model-binding attempted values to the browser.
+        ModelState.Clear();
+        if (errors.Count != 0)
+        {
+            foreach (var error in errors) ModelState.AddModelError(error.Field, error.Message);
+            var safe = ToViewModel(config, CurrentStore, previous);
+            safe.CoreApi.Environment = model.CoreApi.Environment;
+            return View("Configure", safe);
+        }
+        if (command == "test")
+        {
+            var message = await coreApiClient.TestConnection(model.CoreApi, HttpContext.RequestAborted);
+            TempData[message.StartsWith("Connection successful.", StringComparison.Ordinal)
+                ? WellKnownTempData.SuccessMessage : WellKnownTempData.ErrorMessage] = message;
+        }
+        else
+        {
+            await coreSettings.Save(CurrentStore.Id, model.CoreApi);
+            TempData[WellKnownTempData.SuccessMessage] = "Core Fireblocks API settings saved.";
+        }
+        return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
+    }
+
+    private static FireblocksStoreConfigViewModel ToViewModel(FireblocksStoreConfig config, StoreData store, CoreApiSettings core) => new()
+    {
+        CoreApi = new CoreApiSettings { Environment = core.Environment },
+        HasCoreApiKey = !string.IsNullOrEmpty(core.ApiKey),
+        HasCorePrivateKey = !string.IsNullOrEmpty(core.PrivateKey),
         Enabled = store.GetPaymentMethodConfig(FireblocksPaymentMethodHandler.PaymentMethod, onlyEnabled: true) is not null,
         EnvironmentId = config.EnvironmentId,
         ApiEndpoint = config.ApiEndpoint,

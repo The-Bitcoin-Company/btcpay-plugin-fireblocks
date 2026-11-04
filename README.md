@@ -6,6 +6,10 @@ Creates hosted Fireblocks Flow payment links for BTCPay USD invoices, reconciles
 and Solana finality guarantees remain unverified; this is not real-value acceptance. See the
 [provider evidence, open questions, and unscheduled acceptance checklist](docs/dynamic-provider-contract.md).
 
+## Core Fireblocks API
+
+Configure and test a separate Sandbox or US Mainnet/Testnet workspace with write-only core API credentials. The connection test is read-only and moves no funds. See [Sandbox setup and credential/backup protection](docs/core-api-setup.md). This does **not** make Dynamic Flow checkout testnet-compatible.
+
 ## Prerequisites
 
 - .NET SDK **10.0.403** (exact version pinned in `global.json`), Git with submodule support.

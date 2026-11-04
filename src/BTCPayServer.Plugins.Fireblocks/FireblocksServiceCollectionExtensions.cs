@@ -1,6 +1,7 @@
 using BTCPayServer.Payments;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Data;
+using BTCPayServer.Plugins.Fireblocks.Core;
 using BTCPayServer.Plugins.Fireblocks.Flow;
 using BTCPayServer.Plugins.Fireblocks.Payments;
 using Microsoft.Extensions.Configuration;
@@ -17,6 +18,10 @@ public static class FireblocksServiceCollectionExtensions
     public static IServiceCollection AddFireblocksPaymentMethod(this IServiceCollection services)
     {
         services.AddPluginDbContext<FireblocksDbContext>();
+        services.TryAddSingleton<ICoreApiSettingsStore, CoreApiSettingsStore>();
+        services.AddHttpClient<CoreApiClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
+            .RemoveAllLoggers();
         services.AddHttpClient(FlowHttpClient, client =>
         {
             client.Timeout = Timeout.InfiniteTimeSpan;
