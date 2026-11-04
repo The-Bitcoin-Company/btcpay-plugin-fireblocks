@@ -117,24 +117,23 @@ public class CoreApiTests
     public void StoragePreservesIndependentSecretsButGreenfieldRedactsThem()
     {
         var handler = new FireblocksPaymentMethodHandler(null!);
-        var previous = TestData.Config();
-        previous.CoreApi = Credentials(CoreApiSettings.Us);
-        var update = TestData.Config();
-        update.CoreApi = new() { Environment = CoreApiSettings.Us, ApiKey = " ", PrivateKey = "\n" };
-        update.PreserveCredential(previous);
-        Assert.Equal(previous.CoreApi.ApiKey, update.CoreApi.ApiKey);
-        Assert.Equal(previous.CoreApi.PrivateKey, update.CoreApi.PrivateKey);
-        Assert.Equal(TestData.Credential, update.ApiCredential);
-        var parsed = FireblocksStoreConfig.Parse(update.ToStorageToken(handler.Serializer), handler.Serializer);
-        Assert.Equal(previous.CoreApi.PrivateKey, parsed.CoreApi.PrivateKey);
-        Assert.Equal(CoreApiSettings.Us, parsed.CoreApi.Environment);
+        var previous = Credentials(CoreApiSettings.Us);
+        var update = new CoreApiSettings { Environment = CoreApiSettings.Us, ApiKey = " ", PrivateKey = "\n" };
+        update.PreserveSecrets(previous);
+        Assert.Equal(previous.ApiKey, update.ApiKey);
+        Assert.Equal(previous.PrivateKey, update.PrivateKey);
+        var parsed = update.ToStorageToken(Newtonsoft.Json.JsonSerializer.CreateDefault()).ToObject<CoreApiSettings>()!;
+        Assert.Equal(previous.PrivateKey, parsed.PrivateKey);
+        Assert.Equal(CoreApiSettings.Us, parsed.Environment);
         var json = JObject.FromObject(parsed, handler.Serializer.ForAPI()).ToString();
-        Assert.DoesNotContain(previous.CoreApi.PrivateKey, json);
-        Assert.DoesNotContain(previous.CoreApi.ApiKey, json);
+        Assert.DoesNotContain(previous.PrivateKey, json);
+        Assert.DoesNotContain(previous.ApiKey, json);
         Assert.DoesNotContain("privateKey", json);
         Assert.DoesNotContain("apiKey", json);
-        Assert.DoesNotContain(TestData.Credential, json);
-        Assert.Empty(new FireblocksStoreConfig().CoreApi.Validate());
+        var flowJson = JObject.FromObject(TestData.Config(), handler.Serializer.ForAPI()).ToString();
+        Assert.DoesNotContain("coreApi", flowJson);
+        Assert.DoesNotContain(TestData.Credential, flowJson);
+        Assert.Empty(new CoreApiSettings().Validate());
     }
 
     [Fact]
@@ -142,59 +141,55 @@ public class CoreApiTests
     {
         var paymentHandler = new FireblocksPaymentMethodHandler(null!);
         var config = TestData.Config();
-        config.CoreApi = Credentials();
+        var core = Credentials();
+        var settings = new FakeSettingsStore();
+        await settings.Save("store", core);
         var store = new StoreData { Id = "store" };
         store.SetPaymentMethodConfig(paymentHandler.PaymentMethodId, config.ToStorageToken(paymentHandler.Serializer));
         var context = new DefaultHttpContext();
         context.SetStoreData(store);
         using var http = new HttpClient(new FakeHandler(_ => throw new Exception("Must not send")));
-        var controller = new UIFireblocksController(null!, paymentHandler, new ConfigurationBuilder().Build(), new CoreApiClient(http))
+        var controller = new UIFireblocksController(null!, paymentHandler, new ConfigurationBuilder().Build(), new CoreApiClient(http), settings)
         { ControllerContext = new ControllerContext { HttpContext = context } };
-        var get = Assert.IsType<FireblocksStoreConfigViewModel>(Assert.IsType<ViewResult>(controller.Configure()).Model);
+        var get = Assert.IsType<FireblocksStoreConfigViewModel>(Assert.IsType<ViewResult>(await controller.Configure()).Model);
         Assert.Empty(get.CoreApi.PrivateKey);
         Assert.Empty(get.CoreApi.ApiKey);
         Assert.True(get.HasCorePrivateKey);
-        controller.ModelState.SetModelValue("CoreApi.PrivateKey", config.CoreApi.PrivateKey, config.CoreApi.PrivateKey);
-        var post = new FireblocksStoreConfigViewModel { CoreApi = new() { ApiKey = config.CoreApi.ApiKey, PrivateKey = "bad-key" } };
+        controller.ModelState.SetModelValue("CoreApi.PrivateKey", core.PrivateKey, core.PrivateKey);
+        var post = new FireblocksStoreConfigViewModel { CoreApi = new() { ApiKey = core.ApiKey, PrivateKey = "bad-key" } };
         var result = Assert.IsType<ViewResult>(await controller.ConfigureCore(post, "test"));
         var model = Assert.IsType<FireblocksStoreConfigViewModel>(result.Model);
         Assert.Empty(model.CoreApi.PrivateKey);
         Assert.Empty(model.CoreApi.ApiKey);
         Assert.All(controller.ModelState.Values, value => Assert.Null(value.AttemptedValue));
-        Assert.Equal(config.CoreApi.PrivateKey, paymentHandler.ParsePaymentMethodConfig(store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId)!).CoreApi.PrivateKey);
+        Assert.Equal(core.PrivateKey, (await settings.Get("store")).PrivateKey);
     }
 
     [Fact]
-    public async Task DynamicOnlyGreenfieldUpdateKeepsCoreWorkspaceAndCredentials()
+    public async Task DynamicReplacementAndDeletionLeaveCoreSettingsUnchanged()
     {
         var handler = new FireblocksPaymentMethodHandler(null!);
-        var previous = TestData.Config();
-        previous.CoreApi = Credentials(CoreApiSettings.Us);
-        var update = (JObject)TestData.Config().ToStorageToken(handler.Serializer);
-        update.Remove(nameof(FireblocksStoreConfig.CoreApi));
-        update.Remove("coreApi");
-        var context = new BTCPayServer.Payments.PaymentMethodConfigValidationContext(null!,
-            new Microsoft.AspNetCore.Mvc.ModelBinding.ModelStateDictionary(), update,
-            new System.Security.Claims.ClaimsPrincipal(), previous.ToStorageToken(handler.Serializer), new StoreData());
-        await handler.ValidatePaymentMethodConfig(context);
-        Assert.True(context.ModelState.IsValid);
-        var saved = handler.ParsePaymentMethodConfig(context.Config);
-        Assert.Equal(CoreApiSettings.Us, saved.CoreApi.Environment);
-        Assert.Equal(previous.CoreApi.PrivateKey, saved.CoreApi.PrivateKey);
-        Assert.Equal(previous.CoreApi.ApiKey, saved.CoreApi.ApiKey);
+        var store = new StoreData { Id = "store" };
+        var settings = new FakeSettingsStore();
+        var core = Credentials(CoreApiSettings.Us);
+        await settings.Save(store.Id, core);
+        store.SetPaymentMethodConfig(handler.PaymentMethodId, TestData.Config().ToStorageToken(handler.Serializer));
+        // Same token deletion used by Greenfield payment-method DELETE.
+        store.SetPaymentMethodConfig(handler.PaymentMethodId, null);
+        Assert.Null(store.GetPaymentMethodConfig(handler.PaymentMethodId));
+        Assert.Equal(core.PrivateKey, (await settings.Get(store.Id)).PrivateKey);
+        Assert.Equal(CoreApiSettings.Us, (await settings.Get(store.Id)).Environment);
+        Assert.Empty((await settings.Get("another-store")).PrivateKey);
     }
 
     [Fact]
     public async Task TestActionUsesSavedSecretsWithoutSavingOrEnablingFlow()
     {
         var paymentHandler = new FireblocksPaymentMethodHandler(null!);
-        var config = new FireblocksStoreConfig { CoreApi = Credentials() };
+        var core = Credentials();
+        var settings = new FakeSettingsStore();
+        await settings.Save("store", core);
         var store = new StoreData { Id = "store" };
-        var stored = config.ToStorageToken(paymentHandler.Serializer);
-        store.SetPaymentMethodConfig(paymentHandler.PaymentMethodId, stored);
-        var blob = store.GetStoreBlob();
-        blob.SetExcluded(paymentHandler.PaymentMethodId, true);
-        store.SetStoreBlob(blob);
         var context = new DefaultHttpContext();
         context.SetStoreData(store);
         using var fake = new FakeHandler(request =>
@@ -203,7 +198,7 @@ public class CoreApiTests
             return new(HttpStatusCode.OK);
         });
         using var http = new HttpClient(fake);
-        var controller = new UIFireblocksController(null!, paymentHandler, new ConfigurationBuilder().Build(), new CoreApiClient(http))
+        var controller = new UIFireblocksController(null!, paymentHandler, new ConfigurationBuilder().Build(), new CoreApiClient(http), settings)
         {
             ControllerContext = new ControllerContext { HttpContext = context },
             TempData = new Microsoft.AspNetCore.Mvc.ViewFeatures.TempDataDictionary(context, new EmptyTempDataProvider())
@@ -211,8 +206,56 @@ public class CoreApiTests
         var result = await controller.ConfigureCore(new() { CoreApi = new() { Environment = CoreApiSettings.Us } }, "test");
         Assert.IsType<RedirectToActionResult>(result);
         Assert.Equal(1, fake.Calls);
-        Assert.True(JToken.DeepEquals(stored, store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId)));
-        Assert.Null(store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId, onlyEnabled: true));
+        Assert.Equal(1, settings.Saves);
+        Assert.Equal(CoreApiSettings.Sandbox, (await settings.Get(store.Id)).Environment);
+        Assert.Null(store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SavingCoreSettingsPreservesBlankSecretsAndNeverChangesDynamicConfiguration(bool hasFlow)
+    {
+        var paymentHandler = new FireblocksPaymentMethodHandler(null!);
+        var store = new StoreData { Id = "store" };
+        if (hasFlow)
+            store.SetPaymentMethodConfig(paymentHandler.PaymentMethodId, TestData.Config().ToStorageToken(paymentHandler.Serializer));
+        var original = store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId)?.DeepClone();
+        var settings = new FakeSettingsStore();
+        var core = Credentials(CoreApiSettings.Us);
+        var context = new DefaultHttpContext();
+        context.SetStoreData(store);
+        using var fake = new FakeHandler(_ => throw new Exception("Save must not send requests"));
+        using var http = new HttpClient(fake);
+        var controller = new UIFireblocksController(null!, paymentHandler, new ConfigurationBuilder().Build(), new CoreApiClient(http), settings)
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+            TempData = new Microsoft.AspNetCore.Mvc.ViewFeatures.TempDataDictionary(context, new EmptyTempDataProvider())
+        };
+        Assert.IsType<RedirectToActionResult>(await controller.ConfigureCore(new() { CoreApi = core }, "save"));
+        Assert.Equal(core.PrivateKey, (await settings.Get(store.Id)).PrivateKey);
+        Assert.IsType<RedirectToActionResult>(await controller.ConfigureCore(new() { CoreApi = new() { Environment = CoreApiSettings.Us } }, "save"));
+        Assert.Equal(core.PrivateKey, (await settings.Get(store.Id)).PrivateKey);
+        Assert.Equal(core.ApiKey, (await settings.Get(store.Id)).ApiKey);
+        Assert.Equal(2, settings.Saves);
+        Assert.Equal(0, fake.Calls);
+        Assert.True(JToken.DeepEquals(original, store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId)));
+        if (!hasFlow)
+            Assert.Null(store.GetPaymentMethodConfig(paymentHandler.PaymentMethodId, onlyEnabled: true));
+    }
+
+    private sealed class FakeSettingsStore : ICoreApiSettingsStore
+    {
+        private readonly Dictionary<string, JObject> _values = new();
+        public int Saves { get; private set; }
+        public Task<CoreApiSettings> Get(string storeId) => Task.FromResult(
+            _values.TryGetValue(storeId, out var value) ? value.ToObject<CoreApiSettings>()! : new CoreApiSettings());
+        public Task Save(string storeId, CoreApiSettings settings)
+        {
+            Saves++;
+            _values[storeId] = settings.ToStorageToken(Newtonsoft.Json.JsonSerializer.CreateDefault());
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class EmptyTempDataProvider : Microsoft.AspNetCore.Mvc.ViewFeatures.ITempDataProvider

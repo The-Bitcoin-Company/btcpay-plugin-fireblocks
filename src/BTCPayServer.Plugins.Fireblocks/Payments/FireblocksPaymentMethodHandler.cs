@@ -139,10 +139,6 @@ public sealed class FireblocksPaymentMethodHandler(
     {
         var config = ParsePaymentMethodConfig(validationContext.Config);
         var previous = validationContext.PreviousConfig is null ? null : ParsePaymentMethodConfig(validationContext.PreviousConfig);
-        // Dynamic-only API updates must not reset the saved core workspace.
-        if (previous is not null && validationContext.Config[nameof(FireblocksStoreConfig.CoreApi)] is null &&
-            validationContext.Config["coreApi"] is null)
-            config.CoreApi = previous.CoreApi;
         config.PreserveCredential(previous);
         foreach (var error in config.Validate(_allowLocalEndpoints))
             validationContext.ModelState.AddModelError(error.Field, error.Message);

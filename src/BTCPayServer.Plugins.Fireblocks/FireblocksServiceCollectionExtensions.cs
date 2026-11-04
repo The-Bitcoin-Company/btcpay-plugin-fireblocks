@@ -18,6 +18,7 @@ public static class FireblocksServiceCollectionExtensions
     public static IServiceCollection AddFireblocksPaymentMethod(this IServiceCollection services)
     {
         services.AddPluginDbContext<FireblocksDbContext>();
+        services.TryAddSingleton<ICoreApiSettingsStore, CoreApiSettingsStore>();
         services.AddHttpClient<CoreApiClient>()
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
             .RemoveAllLoggers();

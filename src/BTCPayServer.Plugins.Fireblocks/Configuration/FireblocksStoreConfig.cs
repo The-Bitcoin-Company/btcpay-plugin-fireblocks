@@ -18,9 +18,6 @@ public sealed class FireblocksStoreConfig
     public const string UsdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
     public const int UsdcDecimals = 6;
 
-    private CoreApiSettings _coreApi = new();
-    public CoreApiSettings CoreApi { get => _coreApi; set => _coreApi = value ?? new(); }
-
     public string EnvironmentId { get; set; } = string.Empty;
     public string ApiEndpoint { get; set; } = DefaultApiEndpoint;
 
@@ -50,7 +47,6 @@ public sealed class FireblocksStoreConfig
     public JToken ToStorageToken(JsonSerializer serializer)
     {
         var token = JObject.FromObject(this, serializer);
-        token[nameof(CoreApi)] = CoreApi.ToStorageToken(serializer);
         token[nameof(ApiCredential)] = ApiCredential;
         token[nameof(WebhookSecret)] = WebhookSecret;
         return token;
@@ -58,8 +54,6 @@ public sealed class FireblocksStoreConfig
 
     public void PreserveCredential(FireblocksStoreConfig? previous)
     {
-        CoreApi ??= new CoreApiSettings();
-        CoreApi.PreserveSecrets(previous?.CoreApi);
         if (string.IsNullOrWhiteSpace(ApiCredential) && previous is not null)
             ApiCredential = previous.ApiCredential;
         if (string.IsNullOrWhiteSpace(WebhookSecret) && previous is not null)
@@ -74,7 +68,6 @@ public sealed class FireblocksStoreConfig
     public IReadOnlyList<FireblocksConfigurationError> Validate(bool allowLocalEndpoints = false)
     {
         var errors = new List<FireblocksConfigurationError>();
-        errors.AddRange(CoreApi.Validate());
         EnvironmentId = (EnvironmentId ?? string.Empty).Trim();
         ApiEndpoint = (ApiEndpoint ?? string.Empty).Trim();
         ApiCredential ??= string.Empty;
