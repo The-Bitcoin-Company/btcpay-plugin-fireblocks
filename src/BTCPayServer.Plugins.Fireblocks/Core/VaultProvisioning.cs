@@ -22,7 +22,16 @@ public sealed class VaultBinding
     public string WorkspaceFingerprint { get; set; } = "";
     public string AssetId { get; set; } = "";
     public string? VaultAccountId { get; set; }
+    public DateTimeOffset? AccountAttemptAt { get; set; }
+    public bool AccountAttemptAmbiguous { get; set; }
+    public bool WalletConfirmed { get; set; }
+    public string? WalletKey { get; set; }
+    public DateTimeOffset? WalletAttemptAt { get; set; }
     public string? ActivationTransactionId { get; set; }
+    public string? ActivationRetryKey { get; set; }
+    public DateTimeOffset? ActivationRetryAt { get; set; }
+    public bool ActivationFailed { get; set; }
+    public bool ActivationRequired { get; set; }
     public string? Address { get; set; }
     public string State { get; set; } = "Pending";
     public string Diagnostic { get; set; } = "";
@@ -65,7 +74,11 @@ public sealed class VaultProvisioningService(CoreApiClient client, ICoreApiSetti
     // Deliberately narrow allowlist, intersected with the workspace's supported assets.
     public async Task<IReadOnlyList<string>> Assets(string storeId)
     {
-        var settings = await credentials.Get(storeId);
+        return await Assets(await credentials.Get(storeId));
+    }
+
+    private async Task<IReadOnlyList<string>> Assets(CoreApiSettings settings)
+    {
         var assets = await client.Send(settings, HttpMethod.Get, "/supported_assets");
         return assets.EnumerateArray().Select(a => Text(a, "id"))
             .Where(id => settings.Environment == CoreApiSettings.Sandbox
@@ -74,14 +87,14 @@ public sealed class VaultProvisioningService(CoreApiClient client, ICoreApiSetti
             .Select(id => id!).ToArray();
     }
 
-    public async Task<VaultBinding> Provision(string storeId, string? assetId)
+    public async Task<VaultBinding> Provision(string storeId, string? assetId, bool retryActivation = false)
     {
         await using var lease = await store.Lock(storeId);
         var settings = await credentials.Get(storeId);
         var binding = await store.Get(storeId);
         if (binding is null)
         {
-            if (assetId is null || !(await Assets(storeId)).Contains(assetId))
+            if (assetId is null || !(await Assets(settings)).Contains(assetId))
                 throw new CoreApiException("Choose a supported Solana asset from the saved workspace.");
             binding = new() { AssetId = assetId, Environment = settings.Environment, WorkspaceFingerprint = Fingerprint(settings) };
             await store.Save(storeId, binding);
@@ -95,29 +108,79 @@ public sealed class VaultProvisioningService(CoreApiClient client, ICoreApiSetti
             {
                 // Provider idempotency keys expire after 24h. Fail closed well before
                 // expiry rather than risk creating another account after an ambiguous call.
-                if (DateTimeOffset.UtcNow - binding.CreatedAt > TimeSpan.FromHours(23))
+                if (binding.AccountAttemptAmbiguous && DateTimeOffset.UtcNow - binding.AccountAttemptAt > TimeSpan.FromHours(23))
                     throw new CoreApiException("Creation could not be confirmed within the retry window. Reconcile the BTCPay collection vault in the Fireblocks console; do not create another vault.");
-                var vault = await client.Send(settings, HttpMethod.Post, "/vault/accounts",
-                    new { name = "BTCPay collection " + binding.OperationId, autoFuel = false }, binding.OperationId);
+                if (!binding.AccountAttemptAmbiguous)
+                {
+                    if (binding.AccountAttemptAt is not null) binding.OperationId = Guid.NewGuid().ToString();
+                    binding.AccountAttemptAt = DateTimeOffset.UtcNow;
+                }
+                binding.AccountAttemptAmbiguous = true;
+                await store.Save(storeId, binding);
+                JsonElement vault;
+                try
+                {
+                    vault = await client.Send(settings, HttpMethod.Post, "/vault/accounts",
+                        new { name = "BTCPay collection " + binding.OperationId, autoFuel = false }, binding.OperationId);
+                }
+                catch (CoreApiException e) when (e.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.UnprocessableEntity)
+                {
+                    binding.AccountAttemptAmbiguous = false;
+                    throw;
+                }
                 binding.VaultAccountId = Text(vault, "id") ?? throw new CoreApiException("Fireblocks returned no vault ID. Refresh to retry safely.");
                 await store.Save(storeId, binding);
             }
             var path = "/vault/accounts/" + Uri.EscapeDataString(binding.VaultAccountId) + "/" + Uri.EscapeDataString(binding.AssetId);
-            // Wallet identity is the vault/asset pair. Read first on every refresh,
-            // including after an ambiguous POST, instead of creating another vault.
-            try { await client.Send(settings, HttpMethod.Get, path); }
-            catch (CoreApiException e) when (e.StatusCode == HttpStatusCode.NotFound)
+            // Always replay an unconfirmed wallet POST with its original key/body.
+            // A balance GET cannot recover activationTxId after a lost POST response.
+            if (!binding.WalletConfirmed)
             {
-                var wallet = await client.Send(settings, HttpMethod.Post, path, new { }, binding.OperationId + "-wallet");
+                if (binding.WalletAttemptAt is not null && DateTimeOffset.UtcNow - binding.WalletAttemptAt > TimeSpan.FromHours(23))
+                    throw new CoreApiException("Wallet creation could not be confirmed within the retry window. Reconcile activation in the Fireblocks console; do not create another vault.");
+                binding.WalletAttemptAt ??= DateTimeOffset.UtcNow;
+                binding.WalletKey ??= Guid.NewGuid().ToString();
+                await store.Save(storeId, binding);
+                JsonElement wallet;
+                try { wallet = await client.Send(settings, HttpMethod.Post, path, new { }, binding.WalletKey); }
+                catch (CoreApiException e) when (e.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.UnprocessableEntity)
+                {
+                    binding.WalletAttemptAt = null;
+                    binding.WalletKey = null;
+                    throw;
+                }
                 binding.ActivationTransactionId = Text(wallet, "activationTxId");
+                binding.ActivationRequired = Text(wallet, "status") is "PENDING_ACTIVATION" or "ACTIVATION_FAILED";
+                binding.WalletConfirmed = true;
+                await store.Save(storeId, binding);
+            }
+            // Reactivation is explicit: only after a known terminal failure. Persist
+            // the new key before sending and reuse it if this POST is ambiguous.
+            if ((retryActivation && (binding.ActivationFailed || binding.ActivationRequired)) || binding.ActivationRetryKey is not null)
+            {
+                binding.ActivationRetryKey ??= Guid.NewGuid().ToString();
+                binding.ActivationRetryAt ??= DateTimeOffset.UtcNow;
+                await store.Save(storeId, binding);
+                if (DateTimeOffset.UtcNow - binding.ActivationRetryAt > TimeSpan.FromHours(23))
+                    throw new CoreApiException("Reactivation could not be confirmed within the retry window. Reconcile activation in the Fireblocks console.");
+                var activation = await client.Send(settings, HttpMethod.Post, path + "/activate", new { }, binding.ActivationRetryKey);
+                binding.ActivationTransactionId = Text(activation, "activationTxId")
+                    ?? throw new CoreApiException("Reactivation returned no transaction ID. Refresh to retry safely.");
+                binding.ActivationRetryKey = null;
+                binding.ActivationRetryAt = null;
+                binding.ActivationFailed = false;
+                binding.ActivationRequired = false;
                 await store.Save(storeId, binding);
             }
             if (!string.IsNullOrEmpty(binding.ActivationTransactionId))
             {
                 var activation = await client.Send(settings, HttpMethod.Get, "/transactions/" + Uri.EscapeDataString(binding.ActivationTransactionId));
                 var status = Text(activation, "status");
-                if (status is "FAILED" or "REJECTED" or "CANCELLED" or "BLOCKED")
-                    throw new CoreApiException("Asset activation failed. Resolve activation in the Fireblocks console; then refresh. No new vault will be created.");
+                if (status is "FAILED" or "REJECTED" or "CANCELLED" or "BLOCKED" or "TIMEOUT")
+                {
+                    binding.ActivationFailed = true;
+                    throw new CoreApiException("Asset activation failed. Resolve permissions or SOL funding in the Fireblocks console, then choose Retry activation. No new vault will be created.");
+                }
                 if (status != "COMPLETED")
                 {
                     binding.State = "Pending";
@@ -125,6 +188,13 @@ public sealed class VaultProvisioningService(CoreApiClient client, ICoreApiSetti
                     await store.Save(storeId, binding);
                     return binding;
                 }
+            }
+            if (binding.ActivationRequired && string.IsNullOrEmpty(binding.ActivationTransactionId))
+            {
+                binding.State = "Pending";
+                binding.Diagnostic = "Wallet requires activation. Check required SOL and permissions in the Fireblocks console, then choose Retry activation.";
+                await store.Save(storeId, binding);
+                return binding;
             }
             var addresses = await client.Send(settings, HttpMethod.Get, path + "/addresses_paginated?limit=1");
             var address = addresses.GetProperty("addresses").EnumerateArray().Select(a => Text(a, "address")).FirstOrDefault();

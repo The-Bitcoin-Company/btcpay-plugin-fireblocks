@@ -1,6 +1,15 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using BTCPayServer;
+using BTCPayServer.Data;
+using BTCPayServer.Plugins.Fireblocks.Controllers;
+using BTCPayServer.Plugins.Fireblocks.Payments;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Plugins.Fireblocks.Core;
 using Xunit;
@@ -74,7 +83,7 @@ public class VaultProvisioningTests
         var harness = new Harness("US") { LoseVaultResponse = true };
         await harness.Service.Provision("store", "USDC_SOL");
         var saved = (await harness.Store.Get("store"))!;
-        saved.CreatedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        saved.AccountAttemptAt = DateTimeOffset.UtcNow.AddDays(-2);
         await harness.Store.Save("store", saved);
         harness.LoseVaultResponse = false;
         var result = await harness.Service.Provision("store", null);
@@ -122,8 +131,10 @@ public class VaultProvisioningTests
         Assert.Null(pending.Address);
         harness.ActivationStatus = "FAILED";
         Assert.Equal("Error", (await harness.Service.Provision("store", null)).State);
-        harness.ActivationStatus = "COMPLETED";
-        Assert.Equal("Success", (await harness.Service.Provision("store", null)).State);
+        Assert.Equal("Error", (await harness.Service.Provision("store", null)).State);
+        harness.ReactivationStatus = "COMPLETED";
+        Assert.Equal("Success", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+        Assert.Equal("activation-2", (await harness.Store.Get("store"))!.ActivationTransactionId);
         Assert.Equal(1, harness.VaultCreates);
         Assert.Equal(1, harness.WalletCreates);
     }
@@ -136,6 +147,149 @@ public class VaultProvisioningTests
         Assert.True(harness.SignatureChecked);
     }
 
+    [Fact]
+    public async Task LostWalletResponseReplaysKeyAndCannotBypassPendingActivation()
+    {
+        var harness = new Harness("US") { LoseWalletResponse = true, ActivationStatus = "SUBMITTED" };
+        Assert.Equal("Error", (await harness.Service.Provision("store", "USDC_SOL")).State);
+        harness.LoseWalletResponse = false;
+        var result = await harness.Service.Provision("store", null);
+        Assert.Equal("Pending", result.State);
+        Assert.Null(result.Address);
+        Assert.Equal(harness.WalletKeys[0], harness.WalletKeys[1]);
+        Assert.Equal(1, harness.WalletCreates);
+    }
+
+    [Fact]
+    public async Task ActivationRequiredWithoutTransactionCannotBypassExplicitActivation()
+    {
+        var harness = new Harness("US") { WalletRequiresActivation = true, ReactivationStatus = "COMPLETED" };
+        Assert.Equal("Pending", (await harness.Service.Provision("store", "USDC_SOL")).State);
+        Assert.Equal("Pending", (await harness.Service.Provision("store", null)).State);
+        Assert.Equal("Success", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+    }
+
+    [Fact]
+    public async Task AssetSelectionAndProvisioningReadCredentialsOnlyOnce()
+    {
+        var harness = new Harness("US");
+        harness.Credentials.SwitchOnSecondRead = true;
+        Assert.Equal("Success", (await harness.Service.Provision("store", "USDC_SOL")).State);
+        Assert.Equal(1, harness.Credentials.Reads);
+    }
+
+    [Fact]
+    public async Task AgedDefiniteRejectionCanRetryAfterPermissionsAreFixed()
+    {
+        var harness = new Harness("US") { DenyVault = true };
+        await harness.Service.Provision("store", "USDC_SOL");
+        var binding = (await harness.Store.Get("store"))!;
+        Assert.False(binding.AccountAttemptAmbiguous);
+        binding.AccountAttemptAt = DateTimeOffset.UtcNow.AddDays(-2);
+        await harness.Store.Save("store", binding);
+        harness.DenyVault = false;
+        Assert.Equal("Success", (await harness.Service.Provision("store", null)).State);
+        Assert.NotEqual(harness.Keys[0], harness.Keys[1]);
+    }
+
+    [Fact]
+    public async Task TimeoutActivationIsTerminalAndNeedsExplicitRetry()
+    {
+        var harness = new Harness("US") { ActivationStatus = "TIMEOUT" };
+        var result = await harness.Service.Provision("store", "USDC_SOL");
+        Assert.Equal("Error", result.State);
+        Assert.True(result.ActivationFailed);
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    public async Task UseAddressChangesOnlyDestinationAndPreservesCheckoutPolicy(bool existing, bool enabled)
+    {
+        var harness = new Harness("US");
+        await harness.Service.Provision("store", "USDC_SOL");
+        var setup = Controller(harness, existing, enabled);
+        var previous = setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)?.DeepClone();
+        Assert.IsType<RedirectToActionResult>(await setup.Controller.ConfigureVault(null, "use"));
+        var config = setup.Handler.ParsePaymentMethodConfig(setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)!);
+        Assert.Equal(Address, config.SolanaDestinationAddress);
+        Assert.Equal(1, setup.Writer.Writes);
+        Assert.Equal(existing && enabled, setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId, onlyEnabled: true) is not null);
+        if (existing)
+        {
+            var expected = setup.Handler.ParsePaymentMethodConfig(previous!);
+            expected.SolanaDestinationAddress = Address;
+            Assert.True(JToken.DeepEquals(expected.ToStorageToken(setup.Handler.Serializer), config.ToStorageToken(setup.Handler.Serializer)));
+        }
+    }
+
+    [Theory]
+    [InlineData("test")]
+    [InlineData("pending")]
+    [InlineData("invalid")]
+    [InlineData("workspace")]
+    public async Task UnsafeBindingsNeverReplaceDestination(string variant)
+    {
+        var harness = new Harness("US");
+        var binding = await harness.Service.Provision("store", "USDC_SOL");
+        if (variant == "test") binding.Environment = "Sandbox";
+        if (variant == "pending") binding.State = "Pending";
+        if (variant == "invalid") binding.Address = "invalid";
+        if (variant == "workspace") binding.WorkspaceFingerprint = "other";
+        await harness.Store.Save("store", binding);
+        var setup = Controller(harness, true, true);
+        var before = setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)!.DeepClone();
+        await setup.Controller.ConfigureVault(null, "use");
+        Assert.Equal(0, setup.Writer.Writes);
+        Assert.True(JToken.DeepEquals(before, setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)));
+    }
+
+    [Fact]
+    public async Task ValidationFailuresRetainVaultControlsAndRedactCredentials()
+    {
+        var harness = new Harness("US");
+        await harness.Service.Provision("store", "USDC_SOL");
+        var setup = Controller(harness, true, false);
+        var flow = Assert.IsType<ViewResult>(await setup.Controller.Configure(new FireblocksStoreConfigViewModel()));
+        Assert.NotNull(Assert.IsType<FireblocksStoreConfigViewModel>(flow.Model).Vault);
+        var core = Assert.IsType<ViewResult>(await setup.Controller.ConfigureCore(new() { CoreApi = new() { PrivateKey = "bad" } }, "save"));
+        var model = Assert.IsType<FireblocksStoreConfigViewModel>(core.Model);
+        Assert.NotNull(model.Vault);
+        Assert.Empty(model.CoreApi.PrivateKey);
+        Assert.Empty(model.CoreApi.ApiKey);
+        Assert.Equal(0, setup.Writer.Writes);
+    }
+
+    private static (UIFireblocksController Controller, StoreData Store, FireblocksPaymentMethodHandler Handler, Writer Writer) Controller(Harness harness, bool existing, bool enabled)
+    {
+        var handler = new FireblocksPaymentMethodHandler(null!);
+        var store = new StoreData { Id = "store" };
+        if (existing) store.SetPaymentMethodConfig(handler.PaymentMethodId, TestData.Config().ToStorageToken(handler.Serializer));
+        var blob = store.GetStoreBlob();
+        blob.SetExcluded(handler.PaymentMethodId, !enabled);
+        store.SetStoreBlob(blob);
+        var context = new DefaultHttpContext();
+        context.SetStoreData(store);
+        var writer = new Writer();
+        var controller = new UIFireblocksController(writer, handler, new ConfigurationBuilder().Build(), new CoreApiClient(new HttpClient(harness)), harness.Credentials, harness.Service)
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+            TempData = new TempDataDictionary(context, new TempProvider())
+        };
+        return (controller, store, handler, writer);
+    }
+    private sealed class Writer : IStoreConfigurationWriter
+    {
+        public int Writes;
+        public Task Update(StoreData store) { Writes++; return Task.CompletedTask; }
+    }
+    private sealed class TempProvider : ITempDataProvider
+    {
+        public IDictionary<string, object> LoadTempData(HttpContext context) => new Dictionary<string, object>();
+        public void SaveTempData(HttpContext context, IDictionary<string, object> values) { }
+    }
+
     private sealed class Harness : HttpMessageHandler
     {
         public readonly MemoryStore Store = new();
@@ -143,6 +297,10 @@ public class VaultProvisioningTests
         public readonly VaultProvisioningService Service;
         public bool Pending, FailWallet, LoseVaultResponse, SignatureChecked;
         public string? ActivationStatus;
+        public string? ReactivationStatus;
+        public bool LoseWalletResponse, DenyVault, WalletRequiresActivation;
+        private string? _walletResponse;
+        public readonly List<string> WalletKeys = [];
         public int VaultCreates, WalletCreates;
         private bool _walletExists;
         public readonly List<string> Keys = [];
@@ -169,15 +327,20 @@ public class VaultProvisioningTests
                     VaultCreates++;
                     Keys.Add(request.Headers.GetValues("Idempotency-Key").Single());
                     Bodies.Add(body);
+                    if (DenyVault) return new(HttpStatusCode.Forbidden);
                     if (LoseVaultResponse) throw new HttpRequestException("SECRET");
                     return Json("{\"id\":\"42\"}");
                 }
+                if (path.EndsWith("/activate")) return Json("{\"activationTxId\":\"activation-2\"}");
+                WalletKeys.Add(request.Headers.GetValues("Idempotency-Key").Single());
                 if (FailWallet) return new(HttpStatusCode.Forbidden) { Content = new StringContent("SECRET") };
-                WalletCreates++;
+                if (!_walletExists) WalletCreates++;
                 _walletExists = true;
-                return Json(ActivationStatus is null ? "{\"id\":\"USDC_SOL\"}" : "{\"id\":\"USDC_SOL\",\"activationTxId\":\"activation-1\"}");
+                _walletResponse ??= WalletRequiresActivation ? "{\"id\":\"USDC_SOL\",\"status\":\"PENDING_ACTIVATION\"}" : ActivationStatus is null ? "{\"id\":\"USDC_SOL\"}" : "{\"id\":\"USDC_SOL\",\"activationTxId\":\"activation-1\"}";
+                if (LoseWalletResponse) throw new HttpRequestException("SECRET");
+                return Json(_walletResponse);
             }
-            if (path.StartsWith("/v1/transactions/")) return Json("{\"status\":\"" + ActivationStatus + "\"}");
+            if (path.StartsWith("/v1/transactions/")) return Json("{\"status\":\"" + (path.EndsWith("activation-2") ? ReactivationStatus : ActivationStatus) + "\"}");
             if (path.EndsWith("addresses_paginated")) return Json(Pending ? "{\"addresses\":[]}" : "{\"addresses\":[{\"address\":\"" + Address + "\"}]}");
             return _walletExists ? Json("{\"id\":\"USDC_SOL\"}") : new(HttpStatusCode.NotFound);
         }
@@ -187,7 +350,14 @@ public class VaultProvisioningTests
     private sealed class CredentialsStore(CoreApiSettings settings) : ICoreApiSettingsStore
     {
         public CoreApiSettings Settings = settings;
-        public Task<CoreApiSettings> Get(string storeId) => Task.FromResult(Settings);
+        public bool SwitchOnSecondRead;
+        public int Reads;
+        public Task<CoreApiSettings> Get(string storeId)
+        {
+            Reads++;
+            if (SwitchOnSecondRead && Reads > 1) return Task.FromResult(new CoreApiSettings { Environment = "Sandbox", ApiKey = "other", PrivateKey = Settings.PrivateKey });
+            return Task.FromResult(Settings);
+        }
         public Task Save(string storeId, CoreApiSettings value) => throw new NotSupportedException();
     }
     private sealed class MemoryStore : IVaultProvisioningStore

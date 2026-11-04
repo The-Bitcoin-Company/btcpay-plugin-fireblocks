@@ -17,7 +17,7 @@ namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 [Authorize(AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 [Authorize(Policy = Policies.CanModifyStoreSettings, AuthenticationSchemes = AuthenticationSchemes.Cookie)]
 public sealed class UIFireblocksController(
-    StoreRepository storeRepository,
+    IStoreConfigurationWriter storeWriter,
     FireblocksPaymentMethodHandler handler,
     IConfiguration configuration,
     CoreApiClient coreApiClient,
@@ -32,12 +32,7 @@ public sealed class UIFireblocksController(
         var stored = CurrentStore.GetPaymentMethodConfig(handler.PaymentMethodId);
         var config = stored is null ? new FireblocksStoreConfig() : handler.ParsePaymentMethodConfig(stored);
         var model = ToViewModel(config, CurrentStore, await coreSettings.Get(CurrentStore.Id));
-        if (vaults is not null)
-        {
-            model.Vault = await vaults.Get(CurrentStore.Id);
-            try { model.VaultAssets = await vaults.Assets(CurrentStore.Id); }
-            catch (CoreApiException e) { model.VaultMessage = e.Message; }
-        }
+        await PopulateVault(model);
         return View(model);
     }
 
@@ -79,6 +74,7 @@ public sealed class UIFireblocksController(
             model.HasApiCredential = !string.IsNullOrEmpty(config.ApiCredential);
             model.WebhookSecret = string.Empty;
             model.HasWebhookSecret = !string.IsNullOrEmpty(config.WebhookSecret);
+            await PopulateVault(model);
             return View(model);
         }
 
@@ -86,7 +82,7 @@ public sealed class UIFireblocksController(
         var storeBlob = CurrentStore.GetStoreBlob();
         storeBlob.SetExcluded(handler.PaymentMethodId, !model.Enabled);
         CurrentStore.SetStoreBlob(storeBlob);
-        await storeRepository.UpdateStore(CurrentStore);
+        await storeWriter.Update(CurrentStore);
         TempData[WellKnownTempData.SuccessMessage] = "Fireblocks Flow settings saved.";
         return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
     }
@@ -107,6 +103,7 @@ public sealed class UIFireblocksController(
             foreach (var error in errors) ModelState.AddModelError(error.Field, error.Message);
             var safe = ToViewModel(config, CurrentStore, previous);
             safe.CoreApi.Environment = model.CoreApi.Environment;
+            await PopulateVault(safe);
             return View("Configure", safe);
         }
         if (command == "test")
@@ -150,17 +147,26 @@ public sealed class UIFireblocksController(
                     blob.SetExcluded(handler.PaymentMethodId, true);
                     CurrentStore.SetStoreBlob(blob);
                 }
-                await storeRepository.UpdateStore(CurrentStore);
+                await storeWriter.Update(CurrentStore);
                 TempData[WellKnownTempData.SuccessMessage] = "Collection vault address saved as the Solana destination. Checkout enablement is unchanged.";
             }
             else
             {
-                var binding = await vaults.Provision(CurrentStore.Id, assetId);
+                var binding = await vaults.Provision(CurrentStore.Id, assetId, command == "activate");
                 TempData[binding.State == "Error" ? WellKnownTempData.ErrorMessage : WellKnownTempData.SuccessMessage] = binding.Diagnostic;
             }
         }
         catch (CoreApiException e) { TempData[WellKnownTempData.ErrorMessage] = e.Message; }
         return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
+    }
+
+    private async Task PopulateVault(FireblocksStoreConfigViewModel model)
+    {
+        if (vaults is null) return;
+        model.Vault = await vaults.Get(CurrentStore.Id);
+        if (model.Vault is not null) return;
+        try { model.VaultAssets = await vaults.Assets(CurrentStore.Id); }
+        catch (CoreApiException e) { model.VaultMessage = e.Message; }
     }
 
     private static FireblocksStoreConfigViewModel ToViewModel(FireblocksStoreConfig config, StoreData store, CoreApiSettings core) => new()

@@ -59,6 +59,10 @@
         <p>Workspace: @Model.Vault.Environment · Asset: @Model.Vault.AssetId · Vault: @Model.Vault.VaultAccountId</p>
         <p>Address: <code>@Model.Vault.Address</code></p>
         <button type="submit" name="command" value="refresh" class="btn btn-secondary">Refresh status / retry</button>
+        @if (Model.Vault.ActivationFailed || Model.Vault.ActivationRequired)
+        {
+            <button type="submit" name="command" value="activate" class="btn btn-warning">Retry activation (may spend SOL)</button>
+        }
         @if (Model.Vault.State == "Success" && Model.Vault.ProductionCompatible)
         {
             <button type="submit" name="command" value="use" class="btn btn-primary">Use address (replace saved destination)</button>

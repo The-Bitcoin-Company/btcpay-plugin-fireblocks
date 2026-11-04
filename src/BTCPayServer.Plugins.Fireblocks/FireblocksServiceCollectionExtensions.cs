@@ -21,6 +21,7 @@ public static class FireblocksServiceCollectionExtensions
         services.TryAddSingleton<ICoreApiSettingsStore, CoreApiSettingsStore>();
         services.TryAddSingleton<IVaultProvisioningStore, VaultProvisioningStore>();
         services.AddTransient<VaultProvisioningService>();
+        services.TryAddSingleton<IStoreConfigurationWriter, StoreConfigurationWriter>();
         services.AddHttpClient<CoreApiClient>()
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
             .RemoveAllLoggers();
