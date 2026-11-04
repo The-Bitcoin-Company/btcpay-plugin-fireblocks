@@ -21,7 +21,8 @@ public sealed class UIFireblocksController(
     FireblocksPaymentMethodHandler handler,
     IConfiguration configuration,
     CoreApiClient coreApiClient,
-    ICoreApiSettingsStore coreSettings) : Controller
+    ICoreApiSettingsStore coreSettings,
+    VaultProvisioningService? vaults = null) : Controller
 {
     private StoreData CurrentStore => HttpContext.GetStoreData();
 
@@ -30,7 +31,14 @@ public sealed class UIFireblocksController(
     {
         var stored = CurrentStore.GetPaymentMethodConfig(handler.PaymentMethodId);
         var config = stored is null ? new FireblocksStoreConfig() : handler.ParsePaymentMethodConfig(stored);
-        return View(ToViewModel(config, CurrentStore, await coreSettings.Get(CurrentStore.Id)));
+        var model = ToViewModel(config, CurrentStore, await coreSettings.Get(CurrentStore.Id));
+        if (vaults is not null)
+        {
+            model.Vault = await vaults.Get(CurrentStore.Id);
+            try { model.VaultAssets = await vaults.Assets(CurrentStore.Id); }
+            catch (CoreApiException e) { model.VaultMessage = e.Message; }
+        }
+        return View(model);
     }
 
     [HttpPost]
@@ -51,6 +59,9 @@ public sealed class UIFireblocksController(
             PaymentExpiryMinutes = model.PaymentExpiryMinutes
         };
         config.PreserveCredential(previous);
+        if (vaults is not null && await vaults.Get(CurrentStore.Id) is { ProductionCompatible: false, Address: not null } testVault &&
+            config.SolanaDestinationAddress == testVault.Address)
+            ModelState.AddModelError(nameof(model.SolanaDestinationAddress), "This is a non-production vault address; Dynamic checkout requires mainnet USDC.");
         foreach (var error in config.Validate(FlowEndpointSecurity.AllowLocalEndpoints(configuration)))
             ModelState.AddModelError(error.Field, error.Message);
 
@@ -109,6 +120,46 @@ public sealed class UIFireblocksController(
             await coreSettings.Save(CurrentStore.Id, model.CoreApi);
             TempData[WellKnownTempData.SuccessMessage] = "Core Fireblocks API settings saved.";
         }
+        return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
+    }
+
+    [HttpPost("vault")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfigureVault(string? assetId, string command)
+    {
+        if (vaults is null) return NotFound();
+        try
+        {
+            if (command == "use")
+            {
+                var binding = await vaults.Get(CurrentStore.Id);
+                var core = await coreSettings.Get(CurrentStore.Id);
+                if (binding is not { State: "Success", ProductionCompatible: true, Address: not null } ||
+                    binding.WorkspaceFingerprint != VaultProvisioningService.Fingerprint(core) ||
+                    !FireblocksStoreConfig.IsValidSolanaAddress(binding.Address))
+                    throw new CoreApiException("Only a ready mainnet USDC vault from the saved workspace can be used for checkout.");
+                var stored = CurrentStore.GetPaymentMethodConfig(handler.PaymentMethodId);
+                var config = stored is null ? new FireblocksStoreConfig() : handler.ParsePaymentMethodConfig(stored);
+                config.SolanaDestinationAddress = binding.Address;
+                CurrentStore.SetPaymentMethodConfig(handler.PaymentMethodId, config.ToStorageToken(handler.Serializer));
+                // A newly created Dynamic config must remain disabled until its other
+                // required settings have been explicitly saved and validated.
+                if (stored is null)
+                {
+                    var blob = CurrentStore.GetStoreBlob();
+                    blob.SetExcluded(handler.PaymentMethodId, true);
+                    CurrentStore.SetStoreBlob(blob);
+                }
+                await storeRepository.UpdateStore(CurrentStore);
+                TempData[WellKnownTempData.SuccessMessage] = "Collection vault address saved as the Solana destination. Checkout enablement is unchanged.";
+            }
+            else
+            {
+                var binding = await vaults.Provision(CurrentStore.Id, assetId);
+                TempData[binding.State == "Error" ? WellKnownTempData.ErrorMessage : WellKnownTempData.SuccessMessage] = binding.Diagnostic;
+            }
+        }
+        catch (CoreApiException e) { TempData[WellKnownTempData.ErrorMessage] = e.Message; }
         return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
     }
 

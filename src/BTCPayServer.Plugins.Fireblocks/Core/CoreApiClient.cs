@@ -7,7 +7,6 @@ using BTCPayServer.Plugins.Fireblocks.Configuration;
 
 namespace BTCPayServer.Plugins.Fireblocks.Core;
 
-// Intentionally read-only: no vault or transaction creation endpoints.
 public sealed class CoreApiClient(HttpClient httpClient)
 {
     public async Task<string> TestConnection(CoreApiSettings settings, CancellationToken cancellationToken = default)
@@ -42,7 +41,40 @@ public sealed class CoreApiClient(HttpClient httpClient)
         }
     }
 
-    private static string Sign(CoreApiSettings settings, string path)
+    public async Task<JsonElement> Send(CoreApiSettings settings, HttpMethod method, string path,
+        object? body = null, string? idempotencyKey = null, CancellationToken cancellationToken = default)
+    {
+        if (settings.Validate(required: true).Count != 0)
+            throw new CoreApiException("Save valid core workspace credentials first.");
+        try
+        {
+            var bytes = body is null ? Array.Empty<byte>() : JsonSerializer.SerializeToUtf8Bytes(body);
+            using var request = new HttpRequestMessage(method, settings.BaseUrl + path);
+            if (body is not null)
+            {
+                request.Content = new ByteArrayContent(bytes);
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            }
+            request.Headers.Add("X-API-Key", settings.ApiKey);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Sign(settings, "/v1" + path, bytes));
+            if (idempotencyKey is not null) request.Headers.Add("Idempotency-Key", idempotencyKey);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+            using var response = await httpClient.SendAsync(request, timeout.Token);
+            if (!response.IsSuccessStatusCode)
+                throw new CoreApiException(response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    ? "Workspace permission denied. Check environment, API user permissions and IP allowlist; then refresh."
+                    : "Fireblocks request failed. Check workspace availability and asset activation in the console; then refresh.", response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(timeout.Token));
+            return json.RootElement.Clone();
+        }
+        catch (Exception e) when (e is HttpRequestException or OperationCanceledException or CryptographicException or ArgumentException or JsonException)
+        {
+            throw new CoreApiException("Fireblocks request could not be confirmed. Check connectivity and workspace credentials; then refresh.");
+        }
+    }
+
+    private static string Sign(CoreApiSettings settings, string path, byte[]? body = null)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var header = Encode(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", typ = "JWT" }));
@@ -53,7 +85,7 @@ public sealed class CoreApiClient(HttpClient httpClient)
             iat = now,
             exp = now + 25,
             sub = settings.ApiKey,
-            bodyHash = Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant()
+            bodyHash = Convert.ToHexString(SHA256.HashData(body ?? [])).ToLowerInvariant()
         }));
         var unsigned = header + "." + payload;
         using var rsa = RSA.Create();
