@@ -54,11 +54,11 @@ public sealed class UIFireblocksController(
             PaymentExpiryMinutes = model.PaymentExpiryMinutes
         };
         config.PreserveCredential(previous);
+        foreach (var error in config.Validate(FlowEndpointSecurity.AllowLocalEndpoints(configuration)))
+            ModelState.AddModelError(error.Field, error.Message);
         if (vaults is not null && await vaults.Get(CurrentStore.Id) is { ProductionCompatible: false, Address: not null } testVault &&
             config.SolanaDestinationAddress == testVault.Address)
             ModelState.AddModelError(nameof(model.SolanaDestinationAddress), "This is a non-production vault address; Dynamic checkout requires mainnet USDC.");
-        foreach (var error in config.Validate(FlowEndpointSecurity.AllowLocalEndpoints(configuration)))
-            ModelState.AddModelError(error.Field, error.Message);
 
         if (!ModelState.IsValid)
         {

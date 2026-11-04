@@ -163,9 +163,20 @@ public sealed class VaultProvisioningService(CoreApiClient client, ICoreApiSetti
                 await store.Save(storeId, binding);
                 if (DateTimeOffset.UtcNow - binding.ActivationRetryAt > TimeSpan.FromHours(23))
                     throw new CoreApiException("Reactivation could not be confirmed within the retry window. Reconcile activation in the Fireblocks console.");
-                var activation = await client.Send(settings, HttpMethod.Post, path + "/activate", new { }, binding.ActivationRetryKey);
-                binding.ActivationTransactionId = Text(activation, "activationTxId")
-                    ?? throw new CoreApiException("Reactivation returned no transaction ID. Refresh to retry safely.");
+                JsonElement activation;
+                try { activation = await client.Send(settings, HttpMethod.Post, path + "/activate", new { }, binding.ActivationRetryKey); }
+                catch (CoreApiException e) when (e.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.UnprocessableEntity)
+                {
+                    binding.ActivationRetryKey = null;
+                    binding.ActivationRetryAt = null;
+                    throw;
+                }
+                var transactionId = Text(activation, "activationTxId");
+                if (string.IsNullOrEmpty(transactionId) &&
+                    !(Text(activation, "status") is "READY" or "ACTIVATED" &&
+                      Text(activation, "address") is { } readyAddress && FireblocksStoreConfig.IsValidSolanaAddress(readyAddress)))
+                    throw new CoreApiException("Reactivation returned no confirmed activation status. Refresh to retry safely.");
+                binding.ActivationTransactionId = transactionId;
                 binding.ActivationRetryKey = null;
                 binding.ActivationRetryAt = null;
                 binding.ActivationFailed = false;

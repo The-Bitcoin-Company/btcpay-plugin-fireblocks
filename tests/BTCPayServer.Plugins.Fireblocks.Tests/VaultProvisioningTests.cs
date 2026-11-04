@@ -170,6 +170,47 @@ public class VaultProvisioningTests
     }
 
     [Fact]
+    public async Task DefiniteReactivationRejectionNeedsExplicitRetryAndRemainsRecoverable()
+    {
+        var harness = new Harness("US") { ActivationStatus = "FAILED", DenyActivation = true };
+        await harness.Service.Provision("store", "USDC_SOL");
+        Assert.Equal("Error", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+        var saved = (await harness.Store.Get("store"))!;
+        Assert.Null(saved.ActivationRetryKey);
+        Assert.Null(saved.ActivationRetryAt);
+        saved.CreatedAt = DateTimeOffset.UtcNow.AddDays(-2);
+        await harness.Store.Save("store", saved);
+        harness.DenyActivation = false;
+        harness.ReactivationStatus = "COMPLETED";
+        Assert.Equal("Error", (await harness.Service.Provision("store", null)).State);
+        Assert.Single(harness.ActivationKeys);
+        Assert.Equal("Success", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+        Assert.Equal(2, harness.ActivationKeys.Count);
+        Assert.NotEqual(harness.ActivationKeys[0], harness.ActivationKeys[1]);
+    }
+
+    [Fact]
+    public async Task AmbiguousReactivationReplaysSameKeyOnRefresh()
+    {
+        var harness = new Harness("US") { ActivationStatus = "FAILED", LoseActivationResponse = true };
+        await harness.Service.Provision("store", "USDC_SOL");
+        Assert.Equal("Error", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+        harness.LoseActivationResponse = false;
+        harness.ReactivationStatus = "COMPLETED";
+        Assert.Equal("Success", (await harness.Service.Provision("store", null)).State);
+        Assert.Equal(harness.ActivationKeys[0], harness.ActivationKeys[1]);
+    }
+
+    [Fact]
+    public async Task AlreadyReadyActivationResponseWithoutTransactionCanSucceed()
+    {
+        var harness = new Harness("US") { ActivationStatus = "FAILED", ActivationAlreadyReady = true };
+        await harness.Service.Provision("store", "USDC_SOL");
+        Assert.Equal("Success", (await harness.Service.Provision("store", null, retryActivation: true)).State);
+        Assert.Null((await harness.Store.Get("store"))!.ActivationTransactionId);
+    }
+
+    [Fact]
     public async Task AssetSelectionAndProvisioningReadCredentialsOnlyOnce()
     {
         var harness = new Harness("US");
@@ -261,6 +302,28 @@ public class VaultProvisioningTests
         Assert.Equal(0, setup.Writer.Writes);
     }
 
+    [Fact]
+    public async Task WhitespacePaddedTestDestinationCannotEnableMainnetCheckout()
+    {
+        var harness = new Harness("Sandbox");
+        await harness.Service.Provision("store", "SOL_TEST");
+        var setup = Controller(harness, true, false);
+        var before = setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)!.DeepClone();
+        var config = TestData.Config();
+        var posted = new FireblocksStoreConfigViewModel
+        {
+            Enabled = true, EnvironmentId = config.EnvironmentId, ApiEndpoint = config.ApiEndpoint,
+            ApiCredential = config.ApiCredential, WebhookSecret = config.WebhookSecret,
+            AcceptedRiskStates = config.AcceptedRiskStates, HostedPaymentBaseUrl = config.HostedPaymentBaseUrl,
+            SolanaDestinationAddress = " " + Address + " ", PaymentExpiryMinutes = config.PaymentExpiryMinutes
+        };
+        Assert.IsType<ViewResult>(await setup.Controller.Configure(posted));
+        Assert.Contains(nameof(posted.SolanaDestinationAddress), setup.Controller.ModelState.Keys);
+        Assert.Equal(0, setup.Writer.Writes);
+        Assert.True(JToken.DeepEquals(before, setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId)));
+        Assert.Null(setup.Store.GetPaymentMethodConfig(setup.Handler.PaymentMethodId, onlyEnabled: true));
+    }
+
     private static (UIFireblocksController Controller, StoreData Store, FireblocksPaymentMethodHandler Handler, Writer Writer) Controller(Harness harness, bool existing, bool enabled)
     {
         var handler = new FireblocksPaymentMethodHandler(null!);
@@ -299,6 +362,8 @@ public class VaultProvisioningTests
         public string? ActivationStatus;
         public string? ReactivationStatus;
         public bool LoseWalletResponse, DenyVault, WalletRequiresActivation;
+        public bool DenyActivation, LoseActivationResponse, ActivationAlreadyReady;
+        public readonly List<string> ActivationKeys = [];
         private string? _walletResponse;
         public readonly List<string> WalletKeys = [];
         public int VaultCreates, WalletCreates;
@@ -331,7 +396,13 @@ public class VaultProvisioningTests
                     if (LoseVaultResponse) throw new HttpRequestException("SECRET");
                     return Json("{\"id\":\"42\"}");
                 }
-                if (path.EndsWith("/activate")) return Json("{\"activationTxId\":\"activation-2\"}");
+                if (path.EndsWith("/activate"))
+                {
+                    ActivationKeys.Add(request.Headers.GetValues("Idempotency-Key").Single());
+                    if (DenyActivation) return new(HttpStatusCode.Forbidden);
+                    if (LoseActivationResponse) throw new HttpRequestException("SECRET");
+                    return Json(ActivationAlreadyReady ? "{\"status\":\"READY\",\"address\":\"" + Address + "\"}" : "{\"activationTxId\":\"activation-2\"}");
+                }
                 WalletKeys.Add(request.Headers.GetValues("Idempotency-Key").Single());
                 if (FailWallet) return new(HttpStatusCode.Forbidden) { Content = new StringContent("SECRET") };
                 if (!_walletExists) WalletCreates++;
