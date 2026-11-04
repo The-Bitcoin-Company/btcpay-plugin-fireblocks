@@ -1,0 +1,9 @@
+{
+  "flow": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "mode": "payment",
+    "executionState": "initiated",
+    "settlementState": "none"
+  },
+  "paymentUrl": "https://pay.dynamicauth.com?flow=eyJlbnZpcm9ubWVudElkIjoiLi4uIiwiZmxvd0lkIjoiLi4uIn0"
+}

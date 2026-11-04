@@ -59,6 +59,7 @@ def notify(store_id: str, flow_id: str, event_type: str, event_id: str) -> None:
 
 def completed_state(amount: str, risk: str, transaction_id: str) -> dict:
     return {
+        "executionStatus": "source_confirmed",
         "settlementStatus": "completed",
         "riskStatus": risk,
         "amount": amount,
@@ -114,8 +115,8 @@ def exercise_webhook(store_id: str) -> None:
     invoice_id, flow_id = create_flow_invoice(store_id, f"flow-webhook-{int(time.time())}")
     fake_request(flow_id, "state", {
         "executionStatus": "source_confirmed",
-        "settlementStatus": "processing",
-        "riskStatus": "approved",
+        "settlementStatus": "settling",
+        "riskStatus": "cleared",
     })
     notify(store_id, flow_id, "flow.execution.updated", f"execution-{flow_id}")
     time.sleep(2)
@@ -128,7 +129,7 @@ def exercise_webhook(store_id: str) -> None:
     reject_invalid_signature(store_id, flow_id)
     assert_no_payment(store_id, invoice_id)
 
-    fake_request(flow_id, "state", {"riskStatus": "approved"})
+    fake_request(flow_id, "state", {"riskStatus": "cleared"})
     notify(store_id, flow_id, "flow.risk.updated", f"risk-{flow_id}")
     wait_for_status(store_id, invoice_id, "Settled", 25)
     # Repeat the exact event and settlement; BTCPay must retain one payment.
@@ -148,7 +149,7 @@ def exercise_webhook(store_id: str) -> None:
 
 def exercise_amount_policy(store_id: str) -> None:
     under_id, under_flow = create_flow_invoice(store_id, f"flow-under-{int(time.time())}")
-    fake_request(under_flow, "state", completed_state("4.999999", "approved", f"tx-{under_flow}"))
+    fake_request(under_flow, "state", completed_state("4.999999", "cleared", f"tx-{under_flow}"))
     notify(store_id, under_flow, "flow.settlement.updated", f"settlement-{under_flow}")
     deadline = time.monotonic() + 25
     while True:
@@ -164,7 +165,7 @@ def exercise_amount_policy(store_id: str) -> None:
     print(f"Underpayment invoice {under_id}: exact partial payment without settlement")
 
     over_id, over_flow = create_flow_invoice(store_id, f"flow-over-{int(time.time())}")
-    fake_request(over_flow, "state", completed_state("30.500000", "approved", f"tx-{over_flow}"))
+    fake_request(over_flow, "state", completed_state("30.500000", "cleared", f"tx-{over_flow}"))
     notify(store_id, over_flow, "flow.settlement.updated", f"settlement-{over_flow}")
     over = wait_for_status(store_id, over_id, "Settled", 25)
     over_payments = flow_method(store_id, over_id)["payments"]
@@ -186,7 +187,7 @@ def exercise_legacy_rate_recovery(store_id: str) -> None:
     # Simulate an invoice activated before USDC accounting was introduced. The
     # recorder must persist the fixed rate in the invoice blob before AddPayment.
     run_sql(f"UPDATE \"Invoices\" SET \"Blob2\" = \"Blob2\" #- '{{rates,USDC}}' WHERE \"Id\" = '{invoice_id}'")
-    fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
+    fake_request(flow_id, "state", completed_state("25.000000", "cleared", f"tx-{flow_id}"))
     notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
     wait_for_status(store_id, invoice_id, "Settled", 25)
     print(f"Legacy-rate invoice {invoice_id}: persisted USDC accounting before payment")
@@ -194,7 +195,7 @@ def exercise_legacy_rate_recovery(store_id: str) -> None:
 
 def exercise_existing_payment_recovery(store_id: str) -> None:
     invoice_id, flow_id = create_flow_invoice(store_id, f"flow-existing-payment-{int(time.time())}")
-    fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
+    fake_request(flow_id, "state", completed_state("25.000000", "cleared", f"tx-{flow_id}"))
     notify(store_id, flow_id, "flow.settlement.updated", f"settlement-{flow_id}")
     wait_for_status(store_id, invoice_id, "Settled", 25)
 
@@ -216,7 +217,7 @@ def exercise_existing_payment_recovery(store_id: str) -> None:
 
 def exercise_reconciliation(store_id: str) -> None:
     invoice_id, flow_id = create_flow_invoice(store_id, f"flow-reconcile-{int(time.time())}")
-    fake_request(flow_id, "state", completed_state("25.000000", "approved", f"tx-{flow_id}"))
+    fake_request(flow_id, "state", completed_state("25.000000", "cleared", f"tx-{flow_id}"))
     # Deliberately send no webhook. The startup/one-minute outstanding pass must recover it.
     wait_for_status(store_id, invoice_id, "Settled", 80)
     payments = flow_method(store_id, invoice_id).get("payments", [])

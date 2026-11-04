@@ -21,7 +21,7 @@ public class FlowReconciliationServiceTests
     {
         var factory = TestDbContextFactory.Create();
         var attempt = await SeedAttempt(factory);
-        var snapshot = Snapshot(attempt, settlementStatus: "processing", risk: "approved");
+        var snapshot = Snapshot(attempt, settlementStatus: "processing", risk: "cleared");
         var client = new FakeFlowApiClient { FlowHandler = _ => Task.FromResult(snapshot) };
         var recorder = new FakePaymentRecorder();
         var service = Service(factory, client, recorder);
@@ -33,7 +33,7 @@ public class FlowReconciliationServiceTests
         await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
         Assert.Empty(recorder.Payments);
 
-        snapshot = Snapshot(attempt, settlementStatus: "completed", risk: "approved");
+        snapshot = Snapshot(attempt, settlementStatus: "completed", risk: "cleared");
         await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
         var payment = Assert.Single(recorder.Payments);
         Assert.Equal("25.000000", payment.Evidence.Amount);
@@ -44,6 +44,31 @@ public class FlowReconciliationServiceTests
         await restarted.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
         Assert.Single(recorder.Payments);
         Assert.Equal(3, client.FlowRequests.Count);
+    }
+
+    [Fact]
+    public async Task DocumentedServerReadReachesAccountingWithExactAtomicAmount()
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(System.IO.File.ReadAllText(
+            System.IO.Path.Combine(AppContext.BaseDirectory, "Fixtures", "Dynamic", "flow-read.json")))!;
+        json["id"] = attempt.FlowId;
+        json["memo"]!["invoiceId"] = attempt.InvoiceId;
+        json["memo"]!["paymentAttemptId"] = attempt.Id;
+        json["destinationConfig"]!["destinations"]![0]!["identifier"] = TestData.Config().SolanaDestinationAddress;
+        json["settlement"]!["toAddress"] = TestData.Config().SolanaDestinationAddress;
+        var wire = System.Text.Json.JsonSerializer.Deserialize<DynamicFlowResponse>(json.ToJsonString(),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        var recorder = new FakePaymentRecorder();
+        var service = Service(factory, Client(wire.ToSnapshot(attempt.EnvironmentId)), recorder);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        var payment = Assert.Single(recorder.Payments);
+        Assert.Equal(25m, payment.Evidence.TokenAmount);
+        Assert.Equal("25000000", payment.Evidence.AmountAtomic);
+        Assert.Equal("sanitized-settlement-signature", payment.Evidence.TransactionId);
     }
 
     [Theory]
@@ -106,6 +131,68 @@ public class FlowReconciliationServiceTests
         await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
 
         Assert.Empty(recorder.Payments);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("unknown")]
+    [InlineData("pending")]
+    [InlineData("blocked")]
+    [InlineData("review")]
+    [InlineData("approved")]
+    [InlineData("future_safe")]
+    [InlineData("CLEARED")]
+    public async Task UnsafeRiskCannotBeEnabledByStoreAllowlist(string risk)
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var config = TestData.Config();
+        config.AcceptedRiskStates = risk;
+        var recorder = new FakePaymentRecorder();
+        var service = new FlowReconciliationService(new FlowPaymentAttemptRepository(factory),
+            new FakeConfigurations(config), Client(Snapshot(attempt, risk: risk)), recorder,
+            new FakeTimeProvider(Now), NullLogger<FlowReconciliationService>.Instance);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        Assert.Empty(recorder.Payments);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("broadcasted")]
+    [InlineData("future_success")]
+    [InlineData("SOURCE_CONFIRMED")]
+    public async Task UnconfirmedOrUnknownExecutionCannotCredit(string? executionStatus)
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var recorder = new FakePaymentRecorder();
+        var client = Client(Snapshot(attempt, executionStatus: executionStatus));
+
+        await Service(factory, client, recorder).ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+
+        Assert.Empty(recorder.Payments);
+    }
+
+    [Fact]
+    public async Task LegacyApprovedPolicyRequiresExplicitOptInToCleared()
+    {
+        var factory = TestDbContextFactory.Create();
+        var attempt = await SeedAttempt(factory);
+        var config = TestData.Config();
+        config.AcceptedRiskStates = "approved";
+        var recorder = new FakePaymentRecorder();
+        var service = new FlowReconciliationService(new FlowPaymentAttemptRepository(factory),
+            new FakeConfigurations(config), Client(Snapshot(attempt, risk: "cleared")), recorder,
+            new FakeTimeProvider(Now), NullLogger<FlowReconciliationService>.Instance);
+
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Empty(recorder.Payments);
+        config.AcceptedRiskStates = "cleared";
+        await service.ReconcileAsync(attempt.StoreId, attempt.FlowId!);
+        Assert.Single(recorder.Payments);
     }
 
     [Fact]
@@ -337,12 +424,13 @@ public class FlowReconciliationServiceTests
         FlowPaymentAttempt attempt,
         string? wrongField = null,
         string settlementStatus = "completed",
-        string risk = "approved",
+        string risk = "cleared",
         string flowStatus = "pending",
         string? amount = "25.000000",
         string? atomic = "25000000",
         string transactionId = "tx-1",
-        DateTimeOffset? completedAt = null)
+        DateTimeOffset? completedAt = null,
+        string? executionStatus = "source_confirmed")
     {
         var config = TestData.Config();
         var request = FlowPaymentRequestFactory.Create(config, attempt.InvoiceId, attempt.Id, 25m, 900);
@@ -371,7 +459,7 @@ public class FlowReconciliationServiceTests
                 }
                 : request.SettlementConfig,
             DestinationConfig = request.DestinationConfig,
-            Execution = new FlowExecutionStatus { Status = "source_confirmed" },
+            Execution = new FlowExecutionStatus { Status = executionStatus },
             Settlement = new FlowSettlementStatus
             {
                 Status = settlementStatus,

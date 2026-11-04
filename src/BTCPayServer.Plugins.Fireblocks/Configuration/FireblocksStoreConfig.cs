@@ -36,9 +36,9 @@ public sealed class FireblocksStoreConfig
     public string SolanaDestinationAddress { get; set; } = string.Empty;
     public int PaymentExpiryMinutes { get; set; } = 15;
 
-    // Comma-separated provider risk states which permit accounting. Matching is
-    // case-insensitive; an empty/missing provider risk state is never acceptable.
-    public string AcceptedRiskStates { get; set; } = "approved";
+    // Store opt-in policy. Reconciliation also requires the documented exact
+    // risk state 'cleared'; unknown or unsafe states cannot be enabled here.
+    public string AcceptedRiskStates { get; set; } = "cleared";
 
     public static FireblocksStoreConfig Parse(JToken token, JsonSerializer serializer) =>
         token.ToObject<FireblocksStoreConfig>(serializer)

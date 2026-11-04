@@ -188,7 +188,7 @@ def ensure_flow_configuration(store: dict[str, Any]) -> dict[str, Any]:
                 "apiEndpoint": "http://flow-fake:8080/api/v0",
                 "apiCredential": "dev-flow-token",
                 "webhookSecret": "dev-webhook-secret",
-                "acceptedRiskStates": "approved",
+                "acceptedRiskStates": "cleared",
                 "hostedPaymentBaseUrl": "http://localhost:14143/pay",
                 "solanaDestinationAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                 "paymentExpiryMinutes": 15,

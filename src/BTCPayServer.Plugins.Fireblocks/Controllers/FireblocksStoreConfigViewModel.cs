@@ -24,7 +24,7 @@ public sealed class FireblocksStoreConfigViewModel
     public bool HasWebhookSecret { get; set; }
 
     [Display(Name = "Acceptable settlement risk states (comma-separated)")]
-    public string AcceptedRiskStates { get; set; } = "approved";
+    public string AcceptedRiskStates { get; set; } = "cleared";
 
     [Display(Name = "Hosted payment base URL")]
     public string HostedPaymentBaseUrl { get; set; } = FireblocksStoreConfig.DefaultHostedPaymentBaseUrl;

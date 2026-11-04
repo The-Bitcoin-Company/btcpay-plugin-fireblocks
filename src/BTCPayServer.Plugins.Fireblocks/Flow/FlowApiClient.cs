@@ -122,7 +122,7 @@ public sealed partial class FlowApiClient(
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(flowId);
-        var uri = $"{config.ApiEndpoint.TrimEnd('/')}/server/{Uri.EscapeDataString(config.EnvironmentId)}/flows/{Uri.EscapeDataString(flowId)}";
+        var uri = $"{config.ApiEndpoint.TrimEnd('/')}/server/{Uri.EscapeDataString(config.EnvironmentId)}/flow/{Uri.EscapeDataString(flowId)}";
         using var message = new HttpRequestMessage(HttpMethod.Get, uri);
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiCredential);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -165,7 +165,7 @@ public sealed partial class FlowApiClient(
             if (ContainsCredential(json.RootElement, config.ApiCredential) ||
                 ContainsCredential(json.RootElement, config.WebhookSecret))
                 throw new FlowApiException("Flow provider response contained credential material and was rejected.", true);
-            var snapshot = json.RootElement.Deserialize<FlowStateResponse>(JsonOptions)?.Flow;
+            var snapshot = json.RootElement.Deserialize<DynamicFlowResponse>(JsonOptions)?.ToSnapshot(config.EnvironmentId);
             if (snapshot?.Id is not { Length: > 0 })
                 throw new FlowApiException("Flow provider returned an incomplete reconciliation response.", true);
             return snapshot;

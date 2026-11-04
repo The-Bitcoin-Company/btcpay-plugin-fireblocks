@@ -2,13 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace BTCPayServer.Plugins.Fireblocks.Flow;
 
-public sealed class FlowStateResponse
-{
-    [JsonPropertyName("flow")]
-    public FlowSnapshot? Flow { get; init; }
-}
-
-/// <summary>Authoritative server-side Flow state used for every notification and poll.</summary>
+/// <summary>Internal normalized state used for every notification and poll; not a provider wire schema.</summary>
 public sealed class FlowSnapshot
 {
     [JsonPropertyName("id")]

@@ -1,0 +1,27 @@
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "mode": "payment",
+  "amount": "25.00",
+  "currency": "USD",
+  "executionState": "source_confirmed",
+  "settlementState": "completed",
+  "riskState": "cleared",
+  "quoteVersion": 1,
+  "createdAt": "2026-06-15T12:00:00.000Z",
+  "updatedAt": "2026-06-15T12:05:00.000Z",
+  "memo": {"invoiceId": "invoice-example", "paymentAttemptId": "attempt-example"},
+  "settlementConfig": {"strategy": "preferred_order", "settlements": [{"chainName": "SOL", "chainId": "101", "tokenAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "symbol": "USDC", "tokenDecimals": 6}]},
+  "destinationConfig": {"destinations": [{"chainName": "SOL", "type": "address", "identifier": "11111111111111111111111111111111"}]},
+  "toChainName": "SOL",
+  "txHash": "source-signature-not-settlement",
+  "settlementTxHash": "sanitized-settlement-signature",
+  "settlement": {
+    "toChainId": "101",
+    "toToken": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "toAddress": "11111111111111111111111111111111",
+    "amount": "25000000",
+    "amountUsd": "24.99",
+    "toTokenInfo": {"symbol": "USDC", "decimals": 6},
+    "completedAt": "2026-06-15T12:05:00.000Z"
+  }
+}

@@ -193,9 +193,13 @@ public sealed class FlowReconciliationService(
             !SettlementConfigEquals(request.SettlementConfig, snapshot.SettlementConfig) ||
             !DestinationConfigEquals(request.DestinationConfig, snapshot.DestinationConfig))
             return (null, "Flow settlement or destination configuration differs from the immutable creation request.");
-        if (!string.Equals(snapshot.Settlement?.Status, "completed", StringComparison.OrdinalIgnoreCase))
+        // Only the documented successful execution state can authorize credit.
+        // Missing, contradictory, or newly introduced execution states fail closed.
+        if (!string.Equals(snapshot.Execution?.Status, "source_confirmed", StringComparison.Ordinal))
+            return (null, "Flow execution is not source_confirmed; settlement remains unaccounted.");
+        if (!string.Equals(snapshot.Settlement?.Status, "completed", StringComparison.Ordinal))
             return (null, null); // Execution progress alone is never merchant settlement.
-        if (snapshot.Risk?.Status is not { Length: > 0 } risk || !config.GetAcceptedRiskStates().Contains(risk))
+        if (snapshot.Risk?.Status is not "cleared" || !config.GetAcceptedRiskStates().Contains("cleared"))
             return (null, "Flow risk is missing, held, under review, or not accepted by store policy.");
 
         var settlement = snapshot.Settlement!;
