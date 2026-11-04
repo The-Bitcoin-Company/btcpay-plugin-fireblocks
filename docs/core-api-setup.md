@@ -1,6 +1,6 @@
 # Core Fireblocks API connection
 
-The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test, not vault creation, sweeps, scheduling, exchange transfers or transaction submission.
+The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test and collection-vault provisioning. Sweeps, scheduling, exchange transfers and automatic SOL fueling are not supported.
 
 ## Workspace setup
 
@@ -30,5 +30,15 @@ Protect database access and host volumes with least privilege; encrypt disks and
 ## Dynamic Flow remains mainnet-only
 
 Core API settings do not change the existing Dynamic environment, API token, webhook secret, hosted checkout, settlement address or fixed USDC/Solana mainnet asset/network policy. Configuring a Sandbox or Testnet core workspace **does not make Dynamic Flow checkout testnet-compatible**. A store can save/test core credentials with Dynamic Flow disabled and without configuring Dynamic credentials. Adding core settings never enables Flow checkout.
+
+## Create a collection vault
+
+Save core settings first, then select a supported asset under **Collection vault**. The list intersects the workspace's `/supported_assets` response with a narrow allowlist: mainnet `USDC_SOL`, or test `SOL_TEST` / `USDC_SOL_TEST` where available. Sandbox never offers mainnet USDC. Unsupported/custom tokens are intentionally excluded. Vault creation requires vault-account and asset-wallet creation permissions beyond the read-only connection test.
+
+**Create vault and use address** creates one account (automatic fueling disabled), creates its asset wallet, and retrieves its deposit address. Pending wallet activation can require approvals or SOL supplied by the operator in the Fireblocks console. Use **Refresh status / retry**; there is no background provisioning job. If creation reports activation required without a transaction, or an activation transaction fails (including timeout), fix funding/permissions and choose **Retry activation (may spend SOL)**. This explicitly calls the wallet activation API using a separately persisted retry key; it never creates another vault. Activation transactions, when returned by Fireblocks, must complete before the address is ready. Failures retain a safe diagnostic and existing progress; raw provider bodies are never shown.
+
+A ready production-compatible vault exposes **Use address (replace saved destination)**. This explicit confirmation saves the destination without replacing credentials or enabling checkout. Sandbox/test results are visibly non-production and cannot be applied to the mainnet destination; existing checkout remains unchanged. Provisioning metadata (vault ID, asset ID, address, workspace environment and a hashed workspace identity) is stored separately as `Fireblocks.CollectionVault`, independent of Dynamic settings.
+
+Each store gets one provisioning operation. Refreshes/resubmissions reuse it, serialized across server processes. The account POST uses a persisted idempotency key and identical body; wallet retries address the same vault/asset pair. If an account, wallet or reactivation response remains ambiguous after 23 hours, that creation step stops rather than risking duplication beyond Fireblocks' 24-hour idempotency window. Definite account/wallet validation or permission rejections remain retryable after correction, even days later; a new account retry identity is only allocated after a definite rejection, never after an ambiguous response. Reconcile the named **BTCPay collection** account in the console before any manual recovery; do not delete the operation setting and retry blindly. There is no UI reset or arbitrary existing-vault linking. Restore the original workspace credentials to refresh an operation after switching workspaces. Back up the provisioning record with the database.
 
 Authentication follows the [Fireblocks JWT contract](https://developers.fireblocks.com/reference/signing-a-request-jwt-structure): RS256, per-request nonce, exact path/query, short expiration and SHA-256 request body hash.

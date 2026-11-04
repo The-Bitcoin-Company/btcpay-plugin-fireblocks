@@ -5,7 +5,7 @@
 }
 
 <h2 class="mb-4">Core Fireblocks API</h2>
-<p>Read-only workspace connection, separate from Dynamic Flow. Sandbox does not enable testnet checkout. No vaults or transactions are created.</p>
+<p>Workspace connection, separate from Dynamic Flow. Test connection is read-only. Sandbox does not enable testnet checkout.</p>
 <form method="post" asp-action="ConfigureCore" asp-route-storeId="@Context.Request.RouteValues["storeId"]" autocomplete="off">
     <div class="form-group">
         <label asp-for="CoreApi.Environment" class="form-label">Workspace environment</label>
@@ -31,6 +31,43 @@
     <button type="submit" name="command" value="save" class="btn btn-primary">Save core settings</button>
     <button type="submit" name="command" value="test" class="btn btn-secondary">Test connection</button>
     <p class="form-text">Test uses the entered credentials (or saved values when blank), without saving them or moving funds.</p>
+</form>
+
+<h2 class="mb-4 mt-4">Collection vault</h2>
+<p>Create vault and use address with the saved core workspace credentials. Creation never changes credentials or the existing destination. Only mainnet USDC can be applied to Dynamic checkout; test assets remain separate.</p>
+@if (Model.VaultMessage is not null)
+{
+    <p class="text-warning">@Model.VaultMessage</p>
+}
+<form method="post" asp-action="ConfigureVault" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
+    @if (Model.Vault is null)
+    {
+        <label for="vault-asset" class="form-label">Supported Solana asset</label>
+        <select id="vault-asset" name="assetId" class="form-select">
+            @foreach (var asset in Model.VaultAssets)
+            {
+                <option value="@asset">@asset — @(asset == "USDC_SOL" ? "Mainnet USDC" : "NON-PRODUCTION / test asset")</option>
+            }
+        </select>
+        <button type="submit" name="command" value="create" class="btn btn-secondary mt-2" disabled="@(Model.VaultAssets.Count == 0)">Create vault and use address</button>
+        <p class="form-text">Creates one collection vault. When ready, confirm Use address below to replace the destination. No automatic SOL fueling or sweeps.</p>
+    }
+    else
+    {
+        <p><strong>@Model.Vault.State — @(Model.Vault.ProductionCompatible ? "Mainnet USDC" : "NON-PRODUCTION / Sandbox or test asset")</strong></p>
+        <p>@Model.Vault.Diagnostic</p>
+        <p>Workspace: @Model.Vault.Environment · Asset: @Model.Vault.AssetId · Vault: @Model.Vault.VaultAccountId</p>
+        <p>Address: <code>@Model.Vault.Address</code></p>
+        <button type="submit" name="command" value="refresh" class="btn btn-secondary">Refresh status / retry</button>
+        @if (Model.Vault.ActivationFailed || Model.Vault.ActivationRequired)
+        {
+            <button type="submit" name="command" value="activate" class="btn btn-warning">Retry activation (may spend SOL)</button>
+        }
+        @if (Model.Vault.State == "Success" && Model.Vault.ProductionCompatible)
+        {
+            <button type="submit" name="command" value="use" class="btn btn-primary">Use address (replace saved destination)</button>
+        }
+    }
 </form>
 
 <h2 class="mb-4 mt-4">Fireblocks Flow</h2>

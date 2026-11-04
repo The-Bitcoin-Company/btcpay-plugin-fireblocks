@@ -5,6 +5,9 @@ namespace BTCPayServer.Plugins.Fireblocks.Controllers;
 
 public sealed class FireblocksStoreConfigViewModel
 {
+    public BTCPayServer.Plugins.Fireblocks.Core.VaultBinding? Vault { get; set; }
+    public IReadOnlyList<string> VaultAssets { get; set; } = [];
+    public string? VaultMessage { get; set; }
     public CoreApiSettings CoreApi { get; set; } = new();
     public bool HasCoreApiKey { get; set; }
     public bool HasCorePrivateKey { get; set; }
