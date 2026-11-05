@@ -435,7 +435,7 @@ public class VaultSweepTests
     {
         var h = new Harness();
         Assert.Equal(new SweepExchangeAccount("exchange", "Connected account"), Assert.Single(await h.Service.ExchangeAccounts("store")));
-        await h.Controller().Sweep("save", "ignored", null, null, "Exchange", "exchange");
+        await h.Controller().Sweep("save", "ignored", null, null, destinationType: "Exchange", exchangeAccountId: "exchange");
         var draft = await h.Service.Prepare("store");
         Assert.Equal("Exchange", draft.DestinationType);
         Assert.Equal("exchange", draft.Destination);

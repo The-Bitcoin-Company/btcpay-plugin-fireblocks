@@ -64,6 +64,41 @@ not BTCPay. Sandbox/Testnet exchange support is limited; an empty list or no exa
 asset match is expected and must not be worked around with a mainnet asset.
 This is a transfer only: no sale, conversion, exchange withdrawal or trading.
 
+## Fresh-environment evidence
+
+At revision `b6c7516`, the default/unset destination and standard exchange opt-in
+were exercised with a fresh in-memory store and fake Fireblocks provider. The
+provider supplies a ready Sandbox `SOL_TEST` vault, generated test-only RSA key,
+approved connected account and explicit network-qualified asset response. No live
+credentials, service activation or funds were used. The following command passed
+56 sweep tests (including disabled/unset destination, invalid destination type,
+wrong asset/network, missing account, status changes, switching destinations and
+concurrent/replayed confirmations):
+
+```sh
+nix develop --command bash -c '
+  fresh=$(mktemp -d)
+  env -i PATH="$PATH" HOME="$fresh" XDG_CONFIG_HOME="$fresh/config" \
+    XDG_STATE_HOME="$fresh/state" DOTNET_ROOT="$DOTNET_ROOT" \
+    DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    NUGET_PACKAGES="$HOME/.nuget/packages" \
+    dotnet test tests/BTCPayServer.Plugins.Fireblocks.Tests -c Release \
+      --no-build --no-restore --filter FullyQualifiedName~VaultSweepTests
+  status=$?
+  rm -rf "$fresh"
+  exit "$status"
+'
+```
+
+Prerequisites: the pinned Nix development shell, restored packages and a Release
+build (run `nix develop --command bash scripts/ci.sh` first; 225 tests and packaging
+passed). `nix flake check --print-build-logs` also passed on x86_64-linux.
+There are no feature environment variables, budget controls or conflicting flags.
+Mocked activation does not establish any particular exchange's deposit availability.
+Live exchange account permissions, actual deposit support and normal approval/
+signing remain an operator-owned check in Fireblocks; limited Sandbox/Testnet
+exchange connectivity makes a live automated acceptance transfer inappropriate.
+
 ## Uncertain submission / recovery
 
 The server commits a local pending record **before** the transfer request, with a
