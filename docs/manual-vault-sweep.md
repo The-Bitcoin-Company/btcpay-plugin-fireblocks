@@ -59,6 +59,26 @@ restart and Dynamic configuration deletion. Protect the database and backups;
 restoring a backup from before a sweep can lose its identity and is not a supported
 way to retry. Keep transaction history for reconciliation.
 
+## Fresh-environment evidence
+
+At source revision `cf27616`, the full `nix develop --command bash scripts/ci.sh` gate passed: 232 tests, build and package/checksum verification. The following isolated mock-provider exercise also passed all 63 `VaultSweepTests` cases:
+
+```sh
+nix develop --command bash -c '
+  fresh=$(mktemp -d)
+  trap "rm -rf \"$fresh\"" EXIT
+  env -i HOME="$fresh" XDG_CONFIG_HOME="$fresh/config" XDG_STATE_HOME="$fresh/state" \
+    PATH="$PATH" DOTNET_ROOT="${DOTNET_ROOT:-}" \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+    dotnet test tests/BTCPayServer.Plugins.Fireblocks.Tests -c Release \
+      --no-build --no-restore --filter FullyQualifiedName~VaultSweepTests
+'
+```
+
+Prerequisites: restored/built checkout and pinned SDK from the normal CI gate. Feature environment is cleared; HOME/config/state are temporary. Each test starts with empty serialized store settings, generated ephemeral RSA credentials and an in-memory ready Sandbox `SOL_TEST` vault; no provider credentials, real network calls or funds. Default operation (`AutomationIsOffByDefaultEvenWithSavedDestination`) performed zero balance reads/transfers. Standard opt-in (`AutomaticThresholdUsesAvailableBalanceAndSharedSubmission`) saved destination, enabled a 60-minute interval and minimum 10: available 9 submitted zero transfers, available 10 or 10.123456789 submitted exactly one full-available-balance transfer to the saved destination. Invalid/unset minimum, invalid interval/precision, wrong workspace, changed destination, unavailable/locked balance and unresolved records failed closed. Interval boundary, missed checks, concurrent service instances and restart/uncertain response were exercised. No lifetime budget/reset or conflicting environment variables exist.
+
+Limitation: serialization is tested with the fake store's shared lock; production cross-process serialization reuses the existing PostgreSQL advisory transaction lock, inspected in `VaultProvisioningStore.Lock`, not a new live multi-server database exercise. UI binding/rendering is build-checked, not browser-tested. Real approval/signing, fees and provider balance freshness need the operator-owned Sandbox exercise below; automation never bypasses these. No live service was activated.
+
 ## Small Sandbox acceptance exercise
 
 No production-value transfer is required. Use a separate Sandbox workspace and a
