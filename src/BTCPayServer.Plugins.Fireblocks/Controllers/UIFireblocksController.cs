@@ -164,7 +164,8 @@ public sealed class UIFireblocksController(
     [HttpPost("sweep")]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Sweep(string command, string? destination, string? id, string? amount,
-        bool automationEnabled = false, int checkIntervalMinutes = 60, string? minimumAvailableBalance = null)
+        bool automationEnabled = false, int checkIntervalMinutes = 60, string? minimumAvailableBalance = null,
+        string destinationType = "Wallet", string? exchangeAccountId = null)
     {
         if (sweeps is null) return NotFound();
         try
@@ -175,7 +176,7 @@ public sealed class UIFireblocksController(
                     if (automationEnabled && !ModelState.IsValid) return BadRequest();
                     await sweeps.SaveAutomation(CurrentStore.Id, automationEnabled, checkIntervalMinutes, minimumAvailableBalance);
                     break;
-                case "save": await sweeps.SaveDestination(CurrentStore.Id, destination); break;
+                case "save": await sweeps.SaveDestination(CurrentStore.Id, destinationType == "Exchange" ? exchangeAccountId : destination, destinationType); break;
                 case "prepare": return View("Sweep", await sweeps.Prepare(CurrentStore.Id));
                 case "confirm" when id is not null: await sweeps.Confirm(CurrentStore.Id, id, amount); break;
                 case "refresh": await sweeps.Refresh(CurrentStore.Id); break;
@@ -191,7 +192,15 @@ public sealed class UIFireblocksController(
         if (sweeps is not null) model.Sweeps = await sweeps.Get(CurrentStore.Id);
         if (vaults is null) return;
         model.Vault = await vaults.Get(CurrentStore.Id);
-        if (model.Vault is not null) return;
+        if (model.Vault is not null)
+        {
+            if (model.Vault.State == "Success" && sweeps is not null)
+            {
+                try { model.ExchangeAccounts = await sweeps.ExchangeAccounts(CurrentStore.Id); }
+                catch (CoreApiException) { model.ExchangeMessage = "Connected exchange accounts could not be loaded. Check the original workspace and account-read permissions in Fireblocks."; }
+            }
+            return;
+        }
         try { model.VaultAssets = await vaults.Assets(CurrentStore.Id); }
         catch (CoreApiException e) { model.VaultMessage = e.Message; }
     }

@@ -75,8 +75,23 @@
     <h2 class="mb-4 mt-4">Vault sweeps</h2>
     <p>One same-asset transfer on @Model.Vault.AssetId / @Model.Vault.Environment. Verify the destination belongs to this network: Solana addresses do not identify their network. Fees may require native SOL. No automatic fueling, signing or approvals.</p>
     <form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
-        <label for="sweep-destination" class="form-label">Saved sweep wallet destination</label>
-        <input id="sweep-destination" name="destination" value="@Model.Sweeps.Destination" class="form-control" autocomplete="off" />
+        <label for="sweep-type" class="form-label">Sweep destination type</label>
+        <select id="sweep-type" name="destinationType" class="form-select">
+            <option value="Wallet" selected="@(Model.Sweeps.DestinationType == "Wallet")">Wallet address</option>
+            <option value="Exchange" selected="@(Model.Sweeps.DestinationType == "Exchange")">Connected exchange account (transfer only)</option>
+        </select>
+        <label for="sweep-destination" class="form-label">Wallet address (wallet mode only)</label>
+        <input id="sweep-destination" name="destination" value="@(Model.Sweeps.DestinationType == "Wallet" ? Model.Sweeps.Destination : "")" class="form-control" autocomplete="off" />
+        <label for="sweep-exchange" class="form-label">Connected exchange account (exchange mode only)</label>
+        <select id="sweep-exchange" name="exchangeAccountId" class="form-select">
+            <option value="">Select an account</option>
+            @foreach (var account in Model.ExchangeAccounts)
+            {
+                <option value="@account.Id" selected="@(Model.Sweeps.DestinationType == "Exchange" && Model.Sweeps.Destination == account.Id)">@account.Name · @account.Id</option>
+            }
+        </select>
+        <p class="form-text">Saved: @Model.Sweeps.DestinationType · @Model.Sweeps.Destination. Exchange support is checked for this exact asset/network on save and before submission. Manage exchange connections in Fireblocks. Transfer only: no sale, conversion, exchange withdrawal or trading. Sandbox/Testnet exchange support is limited.</p>
+        @if (Model.ExchangeMessage is not null) { <p class="text-warning">@Model.ExchangeMessage</p> }
         <button type="submit" name="command" value="save" class="btn btn-secondary mt-2">Save sweep destination</button>
         <button type="submit" name="command" value="prepare" class="btn btn-warning mt-2" disabled="@(Model.Vault.State != "Success" || Model.Sweeps.Records.Any(r => r.Unresolved))">Sweep now</button>
         <p class="form-text">Sweep now uses the saved destination, not unsaved edits. You will review and confirm before submission.</p>
@@ -100,7 +115,7 @@
     {
         <div class="border rounded p-3 mt-2">
             <strong>@(sweep.Automatic ? "Automatic" : "Manual") · @sweep.State · @sweep.ProviderStatus</strong>
-            <p>@sweep.CreatedAt · @sweep.Amount @sweep.AssetId · @sweep.Environment · Vault @sweep.VaultId → <code>@sweep.Destination</code></p>
+            <p>@sweep.CreatedAt · @sweep.Amount @sweep.AssetId · @sweep.Environment · Vault @sweep.VaultId → @sweep.DestinationType <code>@sweep.Destination</code></p>
             <p>@sweep.Diagnostic</p>
             <p>Fireblocks transaction: <code>@sweep.TransactionId</code> · External ID: <code>@sweep.Id</code></p>
         </div>

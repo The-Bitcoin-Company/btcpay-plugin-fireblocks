@@ -15,6 +15,7 @@ public sealed class SweepRecord
     public string AssetId { get; set; } = "";
     public string Environment { get; set; } = "";
     public string WorkspaceFingerprint { get; set; } = "";
+    public string DestinationType { get; set; } = "Wallet";
     public string Destination { get; set; } = "";
     public string Amount { get; set; } = "";
     public string State { get; set; } = "Confirmation";
@@ -26,8 +27,11 @@ public sealed class SweepRecord
     public bool Unresolved => State == "Pending";
 }
 
+public sealed record SweepExchangeAccount(string Id, string Name);
+
 public sealed class VaultSweepSettings
 {
+    public string DestinationType { get; set; } = "Wallet";
     public string Destination { get; set; } = "";
     public List<SweepRecord> Records { get; set; } = [];
     public bool AutomationEnabled { get; set; }
@@ -71,16 +75,63 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         return (vault, settings);
     }
 
-    public async Task SaveDestination(string storeId, string? destination)
+    public async Task<IReadOnlyList<SweepExchangeAccount>> ExchangeAccounts(string storeId)
     {
-        destination = destination?.Trim();
-        if (destination is null || !FireblocksStoreConfig.IsValidSolanaAddress(destination))
-            throw new CoreApiException("Enter one valid Solana wallet address for this vault's network.");
+        var (_, settings) = await Context(storeId);
+        var accounts = new List<SweepExchangeAccount>();
+        var cursors = new HashSet<string>();
+        string? after = null;
+        do
+        {
+            var page = await client.Send(settings, HttpMethod.Get, "/exchange_accounts/paged?limit=100" +
+                (after is null ? "" : "&after=" + Uri.EscapeDataString(after)));
+            if (page.ValueKind != JsonValueKind.Object || !page.TryGetProperty("exchanges", out var exchanges) || exchanges.ValueKind != JsonValueKind.Array)
+                throw new CoreApiException("Connected exchange accounts could not be verified.");
+            foreach (var account in exchanges.EnumerateArray())
+                if (Text(account, "status") == "APPROVED" && Text(account, "id") is { Length: > 0 } id)
+                    accounts.Add(new(id, Text(account, "name") ?? id));
+            after = page.TryGetProperty("paging", out var paging) ? Text(paging, "after") : null;
+            if (!string.IsNullOrEmpty(after) && (!cursors.Add(after) || cursors.Count > 100))
+                throw new CoreApiException("Connected exchange account discovery is incomplete. Retry later.");
+        } while (!string.IsNullOrEmpty(after));
+        return accounts;
+    }
+
+    private async Task ValidateDestination(CoreApiSettings settings, VaultBinding vault, string type, string destination)
+    {
+        if (type == "Wallet")
+        {
+            if (!FireblocksStoreConfig.IsValidSolanaAddress(destination) || destination == vault.Address)
+                throw new CoreApiException("Enter a valid same-network wallet address different from the collection vault.");
+            return;
+        }
+        if (type != "Exchange" || string.IsNullOrWhiteSpace(destination))
+            throw new CoreApiException("Select a wallet or connected exchange destination first.");
+        var path = "/exchange_accounts/" + Uri.EscapeDataString(destination);
+        var account = await client.Send(settings, HttpMethod.Get, path);
+        if (Text(account, "id") != destination || Text(account, "status") != "APPROVED")
+            throw new CoreApiException("The exchange account is unavailable or not approved in this workspace.");
+        var asset = await client.Send(settings, HttpMethod.Get, path + "/" + Uri.EscapeDataString(vault.AssetId));
+        // Never infer network support from a ticker or an exchange balance. The
+        // Fireblocks network-qualified identity must be explicitly established.
+        var legacyId = Text(asset, "assetLegacyId") ?? Text(asset, "id");
+        if (legacyId != vault.AssetId)
+            throw new CoreApiException("The exchange destination's exact asset/network could not be verified. No transfer was submitted.");
+    }
+
+    public async Task SaveDestination(string storeId, string? destination, string destinationType = "Wallet")
+    {
+        destination = destination?.Trim() ?? "";
         await using var lease = await vaults.Lock(storeId);
-        var (vault, _) = await Context(storeId);
-        if (destination == vault.Address) throw new CoreApiException("The destination must differ from the collection vault address.");
+        var (vault, settings) = await Context(storeId);
+        await ValidateDestination(settings, vault, destinationType, destination);
         var saved = await store.Get(storeId);
-        if (saved.Destination != destination) saved.AutomationEnabled = false;
+        if (saved.Destination != destination || saved.DestinationType != destinationType)
+        {
+            saved.AutomationEnabled = false;
+            foreach (var old in saved.Records.Where(r => r.State == "Confirmation")) old.State = "Expired";
+        }
+        saved.DestinationType = destinationType;
         saved.Destination = destination;
         await store.Save(storeId, saved);
     }
@@ -111,12 +162,12 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         var (vault, settings) = await Context(storeId);
         var saved = await store.Get(storeId);
         if (saved.Records.Any(r => r.Unresolved)) throw new CoreApiException("An earlier sweep is unresolved. Refresh its status; do not submit another transfer.");
-        if (!FireblocksStoreConfig.IsValidSolanaAddress(saved.Destination)) throw new CoreApiException("Save a sweep destination first.");
+        await ValidateDestination(settings, vault, saved.DestinationType, saved.Destination);
         var balance = await Balance(settings, vault);
         var record = new SweepRecord
         {
             VaultId = vault.VaultAccountId!, AssetId = vault.AssetId, Environment = vault.Environment,
-            WorkspaceFingerprint = vault.WorkspaceFingerprint, Destination = saved.Destination,
+            WorkspaceFingerprint = vault.WorkspaceFingerprint, DestinationType = saved.DestinationType, Destination = saved.Destination,
             Amount = balance.ToString(CultureInfo.InvariantCulture)
         };
         // Only the newest confirmation can be used. Old tabs cannot trigger a later sweep.
@@ -136,9 +187,10 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         if (saved.Records.Any(r => r.Unresolved)) throw new CoreApiException("An earlier sweep is unresolved. Refresh its status first.");
         var (vault, settings) = await Context(storeId);
         if (record.WorkspaceFingerprint != vault.WorkspaceFingerprint || record.VaultId != vault.VaultAccountId ||
-            record.AssetId != vault.AssetId || record.Destination != saved.Destination ||
+            record.AssetId != vault.AssetId || record.Destination != saved.Destination || record.DestinationType != saved.DestinationType ||
             DateTimeOffset.UtcNow - record.CreatedAt > TimeSpan.FromMinutes(15))
             throw new CoreApiException("Sweep settings changed or confirmation expired. Start again from settings.");
+        await ValidateDestination(settings, vault, record.DestinationType, record.Destination);
         var available = await Balance(settings, vault);
         record.Amount = ValidateAmount(amount, record.AssetId, available).ToString(CultureInfo.InvariantCulture);
         return await Submit(storeId, saved, record, settings);
@@ -159,7 +211,9 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
             {
                 operation = "TRANSFER", externalTxId = record.Id, assetId = record.AssetId,
                 source = new { type = "VAULT_ACCOUNT", id = record.VaultId },
-                destination = new { type = "ONE_TIME_ADDRESS", oneTimeAddress = new { address = record.Destination } },
+                destination = record.DestinationType == "Exchange"
+                    ? (object)new { type = "EXCHANGE_ACCOUNT", id = record.Destination }
+                    : new { type = "ONE_TIME_ADDRESS", oneTimeAddress = new { address = record.Destination } },
                 amount = record.Amount
             }, record.Id);
             var transactionId = Text(result, "id");

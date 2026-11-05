@@ -230,7 +230,7 @@ public class VaultSweepTests
         if (change == "balance") h.Balance = "0.1";
         if (change == "zero") h.Balance = "0";
         if (change == "old-tab") await h.Service.Prepare("store");
-        if (change == "old-tab") Assert.Equal("Expired", (await h.Service.Confirm("store", draft.Id, "1")).State);
+        if (change is "old-tab" or "destination") Assert.Equal("Expired", (await h.Service.Confirm("store", draft.Id, "1")).State);
         else await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Confirm("store", draft.Id, "1"));
         Assert.Equal(0, h.Posts);
     }
@@ -421,6 +421,111 @@ public class VaultSweepTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
+    [Fact]
+    public async Task DefaultConfigurationCannotPrepareOrSubmit()
+    {
+        var h = new Harness();
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Prepare("store"));
+        Assert.Empty((await h.Service.Get("store")).Records);
+        Assert.Equal(0, h.Posts);
+    }
+
+    [Fact]
+    public async Task ExchangeDiscoverySelectionAndTransferReuseSweepSafety()
+    {
+        var h = new Harness();
+        Assert.Equal(new SweepExchangeAccount("exchange", "Connected account"), Assert.Single(await h.Service.ExchangeAccounts("store")));
+        await h.Controller().Sweep("save", "ignored", null, null, destinationType: "Exchange", exchangeAccountId: "exchange");
+        var draft = await h.Service.Prepare("store");
+        Assert.Equal("Exchange", draft.DestinationType);
+        Assert.Equal("exchange", draft.Destination);
+        Assert.Equal(0, h.Posts);
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => h.Service.Confirm("store", draft.Id, "1")));
+        Assert.Equal(1, h.Posts);
+        using var body = JsonDocument.Parse(h.Body!);
+        var destination = body.RootElement.GetProperty("destination");
+        Assert.Equal("EXCHANGE_ACCOUNT", destination.GetProperty("type").GetString());
+        Assert.Equal("exchange", destination.GetProperty("id").GetString());
+        Assert.False(destination.TryGetProperty("oneTimeAddress", out _));
+        Assert.Equal("TRANSFER", body.RootElement.GetProperty("operation").GetString());
+        Assert.Equal(draft.Id, body.RootElement.GetProperty("externalTxId").GetString());
+        Assert.Equal(draft.Id, h.Key);
+        Assert.Equal("Pending", h.StateAtSubmission);
+        await h.Service.SaveDestination("store", Destination);
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Prepare("store"));
+        h.Service = h.NewService();
+        await h.Service.Refresh("store");
+        Assert.Equal("Completed", (await h.Service.Get("store")).Records.Single().State);
+        await h.Service.Confirm("store", draft.Id, "1");
+        Assert.Equal(1, h.Posts);
+    }
+
+    [Theory]
+    [InlineData("USDC_ETH", "APPROVED")]
+    [InlineData("USDC_SOL", "APPROVED")]
+    [InlineData("", "APPROVED")]
+    [InlineData("SOL_TEST", "DISCONNECTED")]
+    [InlineData("SOL_TEST", "")]
+    public async Task IncompatibleOrUnknownExchangeNeverSubmits(string asset, string status)
+    {
+        var h = new Harness { ExchangeAsset = asset, ExchangeStatus = status };
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.SaveDestination("store", "exchange", "Exchange"));
+        Assert.Equal(0, h.Posts);
+        Assert.Equal("", (await h.Service.Get("store")).Destination);
+    }
+
+    [Theory]
+    [InlineData("asset")]
+    [InlineData("status")]
+    [InlineData("missing")]
+    public async Task ExchangeIsRevalidatedBeforePrepareAndBeforeConfirm(string change)
+    {
+        var h = new Harness();
+        await h.Service.SaveDestination("store", "exchange", "Exchange");
+        var draft = await h.Service.Prepare("store");
+        if (change == "asset") h.ExchangeAsset = "USDC_ETH";
+        if (change == "status") h.ExchangeStatus = "DISCONNECTED";
+        if (change == "missing") h.ExchangeUnavailable = true;
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Prepare("store"));
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Confirm("store", draft.Id, "1"));
+        Assert.Equal(0, h.Posts);
+    }
+
+    [Fact]
+    public async Task SwitchingDestinationsInvalidatesOldConfirmationsEvenWhenSwitchingBack()
+    {
+        var h = new Harness();
+        var wallet = await h.Draft();
+        await h.Service.SaveDestination("store", "exchange", "Exchange");
+        await h.Service.SaveDestination("store", Destination);
+        Assert.Equal("Expired", (await h.Service.Confirm("store", wallet.Id, "1")).State);
+        await h.Service.SaveDestination("store", "exchange", "Exchange");
+        var exchange = await h.Service.Prepare("store");
+        await h.Service.SaveDestination("store", Destination);
+        Assert.Equal("Expired", (await h.Service.Confirm("store", exchange.Id, "1")).State);
+        Assert.Equal(0, h.Posts);
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.SaveDestination("store", Destination, "unknown"));
+    }
+
+    [Fact]
+    public async Task DiscoveryPagesSafelyAndUnavailableAccountsAreNotOffered()
+    {
+        var h = new Harness { PagedExchanges = true };
+        Assert.Equal(2, (await h.Service.ExchangeAccounts("store")).Count);
+        h.ExchangeStatus = "DISCONNECTED";
+        Assert.Empty(await h.Service.ExchangeAccounts("store"));
+        h.ExchangeUnavailable = true;
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.ExchangeAccounts("store"));
+        Assert.Equal(0, h.Posts);
+    }
+
+    [Fact]
+    public void LegacyWalletSettingsAndRecordsRemainWalletDestinations()
+    {
+        Assert.Equal("Wallet", JsonSerializer.Deserialize<VaultSweepSettings>("{\"Destination\":\"wallet\"}")!.DestinationType);
+        Assert.Equal("Wallet", JsonSerializer.Deserialize<SweepRecord>("{\"Destination\":\"wallet\"}")!.DestinationType);
+    }
+
     private sealed class Harness : HttpMessageHandler
     {
         public readonly MemoryStore Store = new();
@@ -429,6 +534,8 @@ public class VaultSweepTests
         public string Balance = "10.123456789", Status = "COMPLETED", CreateTransactionId = "tx";
         public int Posts, BalanceReads;
         public readonly Clock Clock = new();
+        public string ExchangeAsset = "SOL_TEST", ExchangeStatus = "APPROVED";
+        public bool ExchangeUnavailable, PagedExchanges;
         public async Task Enable()
         {
             await Service.SaveDestination("store", Destination);
@@ -473,6 +580,18 @@ public class VaultSweepTests
                 LastLookup = request.RequestUri.AbsolutePath;
                 if (NotFound) return new(HttpStatusCode.NotFound) { Content = new StringContent("SECRET") };
                 return Json(new { id = "tx", externalTxId = WrongIdentity ? "other" : (await Store.Get("store")).Records.Last(r => r.Unresolved).Id, assetId = "SOL_TEST", status = Status, subStatus = "SECRET" });
+            }
+            if (request.RequestUri.AbsolutePath.StartsWith("/v1/exchange_accounts"))
+            {
+                if (ExchangeUnavailable) return new(HttpStatusCode.NotFound) { Content = new StringContent("SECRET") };
+                if (request.RequestUri.AbsolutePath.EndsWith("/paged"))
+                {
+                    var second = request.RequestUri.Query.Contains("after=");
+                    return Json(new { exchanges = new[] { new { id = second ? "second" : "exchange", name = "Connected account", status = ExchangeStatus } }, paging = new { after = PagedExchanges && !second ? "page2" : "" } });
+                }
+                if (request.RequestUri.AbsolutePath.EndsWith("/exchange"))
+                    return Json(new { id = "exchange", status = ExchangeStatus });
+                return Json(new { id = ExchangeAsset });
             }
             BalanceReads++;
             return Json(new { available = Balance, total = "1000", lockedAmount = "1000" });

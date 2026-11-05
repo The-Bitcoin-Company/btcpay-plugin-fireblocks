@@ -4,7 +4,7 @@ Requires a ready collection vault and its original saved core workspace credenti
 (see [core setup](core-api-setup.md)). Sweeps are independent of Dynamic checkout:
 they do not credit invoices, change payment records, or change checkout settings.
 
-1. Save one **sweep wallet destination** in the collection vault settings. This is
+1. Save one **wallet address or connected exchange account** in the collection vault settings. This is
    separate from the Dynamic settlement address. Verify ownership and network:
    a Solana address alone cannot distinguish mainnet from testnet.
 2. Select **Sweep now**. Review the source vault, exact Fireblocks asset/network,
@@ -12,7 +12,8 @@ they do not credit invoices, change payment records, or change checkout settings
    reduce it if desired (USDC: six decimal places; SOL test asset: nine).
 3. Confirm the displayed amount within 15 minutes. The current available balance
    is checked again. A single `TRANSFER` uses the source asset unchanged and a
-   one-time wallet address destination; no exchange, swap or bridge is involved.
+   one-time wallet address or connected `EXCHANGE_ACCOUNT` destination; no swap,
+   sale, conversion, exchange withdrawal, trading or bridge is involved.
 4. Read the settings status. **Pending** is not completion. Approve/sign only
    through the normal Fireblocks controls. Refresh status manually or wait for
    the existing minute worker (also runs on startup); no webhook is required.
@@ -31,6 +32,72 @@ This is the cumulative vault/sweep interface for [#17](https://github.com/The-Bi
 Smallest safe default: automation is off, even with a funded vault and saved destination. Standard opt-in: follow the [configuration reference](core-api-setup.md#sweep-automation-configuration). No new environment variables or scheduler dependencies. Reuse the minute worker, store settings, database advisory lock, sweep records, submission helper and external-ID reconciliation. Complexity budget: three operator fields and check metadata only; no rule engine, new persistence framework, cron, webhooks or automatic approval/fueling. No exception is needed. Full available balance is requested; fees may cause rejection, especially for native SOL. Threshold is not a spending cap.
 
 The lock covers eligibility, balance read and durable pending persistence before POST. Checks persist their timestamp even without submission; a crash cannot reset the interval. Pending records block both manual and automatic submissions indefinitely until verified terminal. Missed intervals run once on the next worker pass, never catch up. Changing destination disables automation, requiring explicit opt-in again. Existing manual confirmations are expired by an automatic submission. Workspace/vault identity and destination validation remain mandatory. Production access, wallet activation, checkout payments and Fireblocks policy/approval/signing remain independent boundaries; automation does not enable or bypass them.
+## Minimal-safe design: connected exchange destinations
+
+Extends [#16](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/16)
+with [#18](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/18),
+while retaining the interval automation delivered by
+[#17](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/17).
+The cumulative baseline now includes that automation and the manual-sweep changes.
+
+The canonical configuration reference is [core setup](core-api-setup.md), plus
+the saved sweep settings described here. No new environment variables, credentials,
+activation flags or scheduler are introduced. Existing wallet settings migrate
+unchanged; unset destination remains inactive. The cumulative interface is saved
+core credentials/environment, a ready collection vault, one explicitly saved
+wallet or exchange destination, then prepare and confirm. Saving is not spending.
+Fireblocks policy/approval/signing and the explicit confirmation remain independent
+irreversible-operation boundaries; connection testing never grants spending access.
+
+Complexity budget: extend the existing destination snapshot and service, add only
+read-only connected-account discovery and exact asset-ID validation. Do not add
+exchange connectivity management, a parallel transfer path, trading or accounting.
+Exact network-qualified legacy asset IDs must match; symbols such as USDC alone
+are insufficient. Missing/unknown account status or asset identity fails closed.
+Revalidate on save, preparation and confirmation. Changing destination expires
+existing confirmations and disables automation; unresolved records continue to block either destination.
+
+Standard opt-in: follow core setup, load connected accounts, select **Exchange
+account**, save, then Sweep now and confirm. Only already-connected accounts are
+offered. Production exchange connections and credentials are managed in Fireblocks,
+not BTCPay. Sandbox/Testnet exchange support is limited; an empty list or no exact
+asset match is expected and must not be worked around with a mainnet asset.
+This is a transfer only: no sale, conversion, exchange withdrawal or trading.
+
+## Fresh-environment evidence
+
+At revision `b6c7516`, the default/unset destination and standard exchange opt-in
+were exercised with a fresh in-memory store and fake Fireblocks provider. The
+provider supplies a ready Sandbox `SOL_TEST` vault, generated test-only RSA key,
+approved connected account and explicit network-qualified asset response. No live
+credentials, service activation or funds were used. The following command passed
+56 sweep tests (including disabled/unset destination, invalid destination type,
+wrong asset/network, missing account, status changes, switching destinations and
+concurrent/replayed confirmations):
+
+```sh
+nix develop --command bash -c '
+  fresh=$(mktemp -d)
+  env -i PATH="$PATH" HOME="$fresh" XDG_CONFIG_HOME="$fresh/config" \
+    XDG_STATE_HOME="$fresh/state" DOTNET_ROOT="$DOTNET_ROOT" \
+    DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    NUGET_PACKAGES="$HOME/.nuget/packages" \
+    dotnet test tests/BTCPayServer.Plugins.Fireblocks.Tests -c Release \
+      --no-build --no-restore --filter FullyQualifiedName~VaultSweepTests
+  status=$?
+  rm -rf "$fresh"
+  exit "$status"
+'
+```
+
+Prerequisites: the pinned Nix development shell, restored packages and a Release
+build (run `nix develop --command bash scripts/ci.sh` first; 225 tests and packaging
+passed). `nix flake check --print-build-logs` also passed on x86_64-linux.
+There are no feature environment variables, budget controls or conflicting flags.
+Mocked activation does not establish any particular exchange's deposit availability.
+Live exchange account permissions, actual deposit support and normal approval/
+signing remain an operator-owned check in Fireblocks; limited Sandbox/Testnet
+exchange connectivity makes a live automated acceptance transfer inappropriate.
 
 ## Uncertain submission / recovery
 
