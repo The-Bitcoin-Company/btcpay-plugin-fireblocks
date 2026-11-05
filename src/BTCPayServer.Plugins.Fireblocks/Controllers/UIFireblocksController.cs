@@ -22,7 +22,8 @@ public sealed class UIFireblocksController(
     IConfiguration configuration,
     CoreApiClient coreApiClient,
     ICoreApiSettingsStore coreSettings,
-    VaultProvisioningService? vaults = null) : Controller
+    VaultProvisioningService? vaults = null,
+    VaultSweepService? sweeps = null) : Controller
 {
     private StoreData CurrentStore => HttpContext.GetStoreData();
 
@@ -160,8 +161,29 @@ public sealed class UIFireblocksController(
         return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
     }
 
+    [HttpPost("sweep")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Sweep(string command, string? destination, string? id, string? amount)
+    {
+        if (sweeps is null) return NotFound();
+        try
+        {
+            switch (command)
+            {
+                case "save": await sweeps.SaveDestination(CurrentStore.Id, destination); break;
+                case "prepare": return View("Sweep", await sweeps.Prepare(CurrentStore.Id));
+                case "confirm" when id is not null: await sweeps.Confirm(CurrentStore.Id, id, amount); break;
+                case "refresh": await sweeps.Refresh(CurrentStore.Id); break;
+                default: return BadRequest();
+            }
+        }
+        catch (CoreApiException e) { TempData[WellKnownTempData.ErrorMessage] = e.Message; }
+        return RedirectToAction(nameof(Configure), new { storeId = CurrentStore.Id });
+    }
+
     private async Task PopulateVault(FireblocksStoreConfigViewModel model)
     {
+        if (sweeps is not null) model.Sweeps = await sweeps.Get(CurrentStore.Id);
         if (vaults is null) return;
         model.Vault = await vaults.Get(CurrentStore.Id);
         if (model.Vault is not null) return;

@@ -1,0 +1,21 @@
+@model BTCPayServer.Plugins.Fireblocks.Core.SweepRecord
+@{
+    ViewData.SetLayoutModel(new LayoutModel("Fireblocks", "Confirm vault sweep").SetCategory(WellKnownCategories.Store));
+    Layout = "_Layout";
+}
+<h2>Confirm manual sweep</h2>
+<dl>
+    <dt>Source vault</dt><dd>@Model.VaultId</dd>
+    <dt>Asset / network</dt><dd>@Model.AssetId (same asset and network; no swap or bridging)</dd>
+    <dt>Environment</dt><dd>@Model.Environment — @(Model.AssetId == "USDC_SOL" ? "MAINNET" : "NON-PRODUCTION / test asset")</dd>
+    <dt>Saved destination</dt><dd><code>@Model.Destination</code></dd>
+</dl>
+<p>Verify that you control the destination on this network. The transfer is irreversible. Native SOL gas, workspace policy and operator approvals may be required. Nothing is approved, signed or fueled automatically.</p>
+<form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
+    <input type="hidden" name="id" value="@Model.Id" />
+    <label for="sweep-amount" class="form-label">Amount (defaults to available balance; enter a smaller amount to leave funds for fees)</label>
+    <input id="sweep-amount" name="amount" value="@Model.Amount" class="form-control" inputmode="decimal" required />
+    <p class="form-text">Available at preparation: @Model.Amount @Model.AssetId. Balance is checked again before submission. Confirmation expires in 15 minutes.</p>
+    <button type="submit" name="command" value="confirm" class="btn btn-warning mt-2">Confirm transfer of this amount</button>
+    <a asp-action="Configure" asp-route-storeId="@Context.Request.RouteValues["storeId"]" class="btn btn-secondary">Cancel</a>
+</form>

@@ -70,6 +70,29 @@
     }
 </form>
 
+@if (Model.Vault is not null)
+{
+    <h2 class="mb-4 mt-4">Manual vault sweep</h2>
+    <p>One same-asset transfer on @Model.Vault.AssetId / @Model.Vault.Environment. Verify the destination belongs to this network: Solana addresses do not identify their network. Fees may require native SOL. No automatic fueling, signing or approvals.</p>
+    <form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
+        <label for="sweep-destination" class="form-label">Saved sweep wallet destination</label>
+        <input id="sweep-destination" name="destination" value="@Model.Sweeps.Destination" class="form-control" autocomplete="off" />
+        <button type="submit" name="command" value="save" class="btn btn-secondary mt-2">Save sweep destination</button>
+        <button type="submit" name="command" value="prepare" class="btn btn-warning mt-2" disabled="@(Model.Vault.State != "Success" || Model.Sweeps.Records.Any(r => r.Unresolved))">Sweep now</button>
+        <p class="form-text">Sweep now uses the saved destination, not unsaved edits. You will review and confirm before submission.</p>
+        <button type="submit" name="command" value="refresh" class="btn btn-secondary">Refresh sweep status</button>
+    </form>
+    @foreach (var sweep in Model.Sweeps.Records.Where(r => r.State != "Expired" && r.State != "Confirmation").OrderByDescending(r => r.CreatedAt))
+    {
+        <div class="border rounded p-3 mt-2">
+            <strong>@sweep.State · @sweep.ProviderStatus</strong>
+            <p>@sweep.CreatedAt · @sweep.Amount @sweep.AssetId · @sweep.Environment · Vault @sweep.VaultId → <code>@sweep.Destination</code></p>
+            <p>@sweep.Diagnostic</p>
+            <p>Fireblocks transaction: <code>@sweep.TransactionId</code> · External ID: <code>@sweep.Id</code></p>
+        </div>
+    }
+}
+
 <h2 class="mb-4 mt-4">Fireblocks Flow</h2>
 <p class="text-muted mb-4">
     Create hosted Dynamic Flow payment links for USD invoices. Settlement is fixed to USDC on Solana.

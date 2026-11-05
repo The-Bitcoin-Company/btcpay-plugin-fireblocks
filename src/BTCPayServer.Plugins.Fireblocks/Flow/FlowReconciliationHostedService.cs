@@ -8,7 +8,8 @@ public sealed class FlowReconciliationHostedService(
     IFlowReconciliationService reconciliation,
     IFlowInvoiceRecoveryService invoiceRecovery,
     ILogger<FlowReconciliationHostedService> logger,
-    TimeSpan? pollInterval = null) : BackgroundService
+    TimeSpan? pollInterval = null,
+    BTCPayServer.Plugins.Fireblocks.Core.VaultSweepService? sweeps = null) : BackgroundService
 {
     private readonly TimeSpan _pollInterval = pollInterval ?? TimeSpan.FromMinutes(1);
 
@@ -36,6 +37,14 @@ public sealed class FlowReconciliationHostedService(
             catch (Exception) when (!stoppingToken.IsCancellationRequested)
             {
                 logger.LogWarning("The periodic Flow reconciliation pass failed; the next pass will retry");
+            }
+            try
+            {
+                if (sweeps is not null) await sweeps.ReconcileOutstanding(stoppingToken);
+            }
+            catch (Exception) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogWarning("The periodic vault sweep reconciliation pass failed; the next pass will retry");
             }
             try
             {
