@@ -1,6 +1,6 @@
 # Core Fireblocks API connection
 
-The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test and collection-vault provisioning. Sweeps, scheduling, exchange transfers and automatic SOL fueling are not supported.
+The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test, collection-vault provisioning and [confirmed manual same-network vault sweeps](manual-vault-sweep.md). Scheduling, exchange transfers and automatic SOL fueling are not supported.
 
 ## Workspace setup
 
@@ -33,7 +33,7 @@ Core API settings do not change the existing Dynamic environment, API token, web
 
 ## Create a collection vault
 
-Save core settings first, then select a supported asset under **Collection vault**. The list intersects the workspace's `/supported_assets` response with a narrow allowlist: mainnet `USDC_SOL`, or test `SOL_TEST` / `USDC_SOL_TEST` where available. Sandbox never offers mainnet USDC. Unsupported/custom tokens are intentionally excluded. Vault creation requires vault-account and asset-wallet creation permissions beyond the read-only connection test.
+Save core settings first, then select a supported asset under **Collection vault**. The list intersects the workspace's `/supported_assets` response with a narrow allowlist: mainnet `USDC_SOL`, or test `SOL_TEST` / `USDC_SOL_TEST` where available. Sandbox never offers mainnet USDC. Unsupported/custom tokens are intentionally excluded. Vault creation requires vault-account and asset-wallet creation permissions beyond the read-only connection test. Manual sweeps additionally require transaction-creation/spending permissions, a policy permitting the saved wallet destination, and the workspace's normal approvals/signing. A Viewer API user can test the connection but cannot perform the Sandbox sweep exercise. Grant only the permissions needed for the intended operation; the plugin never bypasses policy or approves transactions automatically.
 
 **Create vault and use address** creates one account (automatic fueling disabled), creates its asset wallet, and retrieves its deposit address. Pending wallet activation can require approvals or SOL supplied by the operator in the Fireblocks console. Use **Refresh status / retry**; there is no background provisioning job. If creation reports activation required without a transaction, or an activation transaction fails (including timeout), fix funding/permissions and choose **Retry activation (may spend SOL)**. This explicitly calls the wallet activation API using a separately persisted retry key; it never creates another vault. Activation transactions, when returned by Fireblocks, must complete before the address is ready. Failures retain a safe diagnostic and existing progress; raw provider bodies are never shown.
 

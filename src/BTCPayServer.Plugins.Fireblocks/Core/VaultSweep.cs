@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using BTCPayServer.Plugins.Fireblocks.Configuration;
 using BTCPayServer.Services.Stores;
+using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.Fireblocks.Core;
 
@@ -47,7 +48,7 @@ public sealed class VaultSweepStore(StoreRepository stores) : IVaultSweepStore
 }
 
 public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStore credentials,
-    IVaultProvisioningStore vaults, IVaultSweepStore store)
+    IVaultProvisioningStore vaults, IVaultSweepStore store, ILogger<VaultSweepService>? logger = null)
 {
     public Task<VaultSweepSettings> Get(string storeId) => store.Get(storeId);
 
@@ -145,7 +146,8 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
                 destination = new { type = "ONE_TIME_ADDRESS", oneTimeAddress = new { address = record.Destination } },
                 amount = record.Amount
             }, record.Id);
-            record.TransactionId = Text(result, "id");
+            var transactionId = Text(result, "id");
+            record.TransactionId = string.IsNullOrWhiteSpace(transactionId) ? null : transactionId;
             // Submission is not completion, even if a create response claims completion.
             record.Diagnostic = "Submitted; awaiting provider transaction verification. Approvals must be handled in Fireblocks.";
         }
@@ -172,22 +174,22 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
                 var settings = await credentials.Get(storeId);
                 if (record.WorkspaceFingerprint != VaultProvisioningService.Fingerprint(settings))
                     throw new CoreApiException("Restore the original workspace credentials to reconcile this sweep.");
-                var path = record.TransactionId is null
+                var path = string.IsNullOrWhiteSpace(record.TransactionId)
                     ? "/transactions/external_tx_id/" + Uri.EscapeDataString(record.Id)
                     : "/transactions/" + Uri.EscapeDataString(record.TransactionId);
                 var result = await client.Send(settings, HttpMethod.Get, path);
                 var providerId = Text(result, "id");
-                if (string.IsNullOrEmpty(providerId) || Text(result, "externalTxId") != record.Id ||
+                if (string.IsNullOrWhiteSpace(providerId) || Text(result, "externalTxId") != record.Id ||
                     Text(result, "assetId") != record.AssetId)
                     throw new CoreApiException("Provider transaction identity could not be verified. Reconcile in Fireblocks; this sweep remains blocked.");
                 record.TransactionId = providerId;
                 var status = Text(result, "status");
                 // Never display free-form provider diagnostics or unknown status strings.
                 record.ProviderStatus = status is "COMPLETED" or "FAILED" or "REJECTED" or "CANCELLED" or "BLOCKED" or "TIMEOUT" or
-                    "SUBMITTED" or "QUEUED" or "PENDING_AUTHORIZATION" or "PENDING_SIGNATURE" or "PENDING_3RD_PARTY_MANUAL_APPROVAL" or
+                    "SUBMITTED" or "QUEUED" or "CANCELLING" or "PENDING_AUTHORIZATION" or "PENDING_SIGNATURE" or "PENDING_3RD_PARTY_MANUAL_APPROVAL" or
                     "PENDING_3RD_PARTY" or "BROADCASTING" or "CONFIRMING" or "PENDING_AML_SCREENING" or "PARTIALLY_COMPLETED"
                     ? status : "UNKNOWN";
-                record.State = status == "COMPLETED" ? "Completed" : status is "FAILED" or "REJECTED" or "CANCELLED" or "BLOCKED" ? "Failed" : "Pending";
+                record.State = status == "COMPLETED" ? "Completed" : status is "FAILED" or "REJECTED" or "CANCELLED" or "BLOCKED" or "TIMEOUT" ? "Failed" : "Pending";
                 record.Diagnostic = record.State switch
                 {
                     "Completed" => "Provider confirmed completion.",
@@ -208,8 +210,17 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         foreach (var id in await store.StoreIds())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!(await store.Get(id)).Records.Any(r => r.Unresolved)) continue;
-            await Refresh(id);
+            try
+            {
+                if (!(await store.Get(id)).Records.Any(r => r.Unresolved)) continue;
+                await Refresh(id);
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A corrupt record or database failure in one store must not starve
+                // the remaining stores. Never log exception text or provider bodies.
+                logger?.LogWarning("A vault sweep store could not be reconciled; continuing with other stores and retrying next pass");
+            }
         }
     }
 

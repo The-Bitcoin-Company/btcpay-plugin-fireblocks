@@ -35,7 +35,9 @@ Changing the saved destination cannot redirect an already confirmed transfer.
 A lost response is looked up using `GET /transactions/external_tx_id/{id}`;
 once the transaction ID is recovered, subsequent reads use that ID. Keep the
 original workspace credentials available. A missing/unknown provider transaction,
-404, unknown status, timeout or partial completion remains unresolved, not failed.
+404, unknown status, HTTP timeout or partial completion remains unresolved, not
+failed. An explicit provider transaction status of `TIMEOUT` is a terminal failure,
+not an HTTP timeout; `CANCELLING` remains pending until cancellation is confirmed.
 
 If the process stopped after persisting pending but before actually submitting,
 the record deliberately remains blocked. Use its external ID to reconcile with

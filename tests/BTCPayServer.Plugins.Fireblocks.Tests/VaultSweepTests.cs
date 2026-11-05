@@ -134,7 +134,8 @@ public class VaultSweepTests
     [InlineData("PENDING_SIGNATURE", "Pending")]
     [InlineData("PENDING_AUTHORIZATION", "Pending")]
     [InlineData("CONFIRMING", "Pending")]
-    [InlineData("TIMEOUT", "Pending")]
+    [InlineData("TIMEOUT", "Failed")]
+    [InlineData("CANCELLING", "Pending")]
     [InlineData("PARTIALLY_COMPLETED", "Pending")]
     [InlineData("SECRET", "Pending")]
     [InlineData("COMPLETED", "Completed")]
@@ -154,6 +155,39 @@ public class VaultSweepTests
         Assert.DoesNotContain("SECRET", JsonSerializer.Serialize(saved));
         if (state == "Pending") await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Prepare("store"));
         else Assert.Equal("Confirmation", (await h.Service.Prepare("store")).State);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task EmptyProviderTransactionIdUsesExternalIdentity(string transactionId)
+    {
+        var h = new Harness { CreateTransactionId = transactionId };
+        var draft = await h.Draft();
+        await h.Service.Confirm("store", draft.Id, "1");
+        Assert.Null((await h.Service.Get("store")).Records.Single().TransactionId);
+        // Also tolerate old or corrupted records that already contain blank IDs.
+        var saved = await h.Store.Get("store");
+        saved.Records.Single().TransactionId = transactionId;
+        await h.Store.Save("store", saved);
+        await h.Service.Refresh("store");
+        Assert.Equal("/v1/transactions/external_tx_id/" + draft.Id, h.LastLookup);
+        Assert.Equal("Completed", (await h.Service.Get("store")).Records.Single().State);
+        Assert.Equal(1, h.Posts);
+    }
+
+    [Fact]
+    public async Task BrokenStoreDoesNotStarveFollowingStores()
+    {
+        var h = new Harness();
+        var draft = await h.Draft();
+        await h.Service.Confirm("store", draft.Id, "1");
+        h.Store.IncludeBrokenStore = true;
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        Assert.Equal("Completed", (await h.Service.Get("store")).Records.Single().State);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => h.Service.ReconcileOutstanding(cancellation.Token));
     }
 
     [Theory]
@@ -222,7 +256,7 @@ public class VaultSweepTests
         public readonly MemoryStore Store = new();
         public readonly Credentials Credentials;
         public VaultSweepService Service;
-        public string Balance = "10.123456789", Status = "COMPLETED";
+        public string Balance = "10.123456789", Status = "COMPLETED", CreateTransactionId = "tx";
         public int Posts;
         public bool LoseResponse, NotFound, WrongIdentity;
         public HttpStatusCode? Reject;
@@ -256,7 +290,7 @@ public class VaultSweepTests
                 Key = request.Headers.GetValues("Idempotency-Key").Single();
                 if (Reject is not null) return new(Reject.Value) { Content = new StringContent("SECRET") };
                 if (LoseResponse) throw new HttpRequestException("SECRET");
-                return Json(new { id = "tx", status = "COMPLETED" });
+                return Json(new { id = CreateTransactionId, status = "COMPLETED" });
             }
             if (request.RequestUri!.AbsolutePath.StartsWith("/v1/transactions/"))
             {
@@ -277,13 +311,16 @@ public class VaultSweepTests
     private sealed class MemoryStore : IVaultProvisioningStore, IVaultSweepStore
     {
         public VaultBinding Vault = new();
+        public bool IncludeBrokenStore;
         private string _json = "{}";
         private readonly SemaphoreSlim _lock = new(1);
-        public Task<VaultSweepSettings> Get(string storeId) => Task.FromResult(JsonSerializer.Deserialize<VaultSweepSettings>(_json)!);
+        public Task<VaultSweepSettings> Get(string storeId) => storeId == "broken"
+            ? throw new JsonException("SECRET")
+            : Task.FromResult(JsonSerializer.Deserialize<VaultSweepSettings>(_json)!);
         Task<VaultBinding?> IVaultProvisioningStore.Get(string storeId) => Task.FromResult<VaultBinding?>(Vault);
         public Task Save(string storeId, VaultBinding binding) => throw new NotSupportedException();
         public Task Save(string storeId, VaultSweepSettings settings) { _json = JsonSerializer.Serialize(settings); return Task.CompletedTask; }
-        public Task<string[]> StoreIds() => Task.FromResult(new[] { "store" });
+        public Task<string[]> StoreIds() => Task.FromResult(IncludeBrokenStore ? new[] { "broken", "store" } : new[] { "store" });
         public async Task<IAsyncDisposable> Lock(string storeId) { await _lock.WaitAsync(); return new Lease(_lock); }
         private sealed class Lease(SemaphoreSlim gate) : IAsyncDisposable
         {
