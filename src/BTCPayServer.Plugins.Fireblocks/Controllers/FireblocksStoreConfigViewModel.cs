@@ -9,6 +9,8 @@ public sealed class FireblocksStoreConfigViewModel
     public IReadOnlyList<string> VaultAssets { get; set; } = [];
     public string? VaultMessage { get; set; }
     public BTCPayServer.Plugins.Fireblocks.Core.VaultSweepSettings Sweeps { get; set; } = new();
+    public IReadOnlyList<BTCPayServer.Plugins.Fireblocks.Core.SweepExchangeAccount> ExchangeAccounts { get; set; } = [];
+    public string? ExchangeMessage { get; set; }
     public CoreApiSettings CoreApi { get; set; } = new();
     public bool HasCoreApiKey { get; set; }
     public bool HasCorePrivateKey { get; set; }

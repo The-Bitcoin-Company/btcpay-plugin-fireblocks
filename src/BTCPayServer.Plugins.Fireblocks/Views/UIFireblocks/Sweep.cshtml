@@ -8,8 +8,9 @@
     <dt>Source vault</dt><dd>@Model.VaultId</dd>
     <dt>Asset / network</dt><dd>@Model.AssetId (same asset and network; no swap or bridging)</dd>
     <dt>Environment</dt><dd>@Model.Environment — @(Model.AssetId == "USDC_SOL" ? "MAINNET" : "NON-PRODUCTION / test asset")</dd>
-    <dt>Saved destination</dt><dd><code>@Model.Destination</code></dd>
+    <dt>Saved destination</dt><dd>@Model.DestinationType · <code>@Model.Destination</code></dd>
 </dl>
+<p>Transfer only: no sale, conversion, exchange withdrawal or trading.</p>
 <p>Verify that you control the destination on this network. The transfer is irreversible. Native SOL gas, workspace policy and operator approvals may be required. Nothing is approved, signed or fueled automatically.</p>
 <form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
     <input type="hidden" name="id" value="@Model.Id" />
