@@ -24,6 +24,14 @@ fees; choose a smaller amount. No auto-fueling or remediation is attempted.
 Provider error bodies and substatus text are never displayed or logged by the
 sweep implementation; safe guidance directs the operator to the console.
 
+## Minimal-safe design: optional interval sweeps
+
+This is the cumulative vault/sweep interface for [#17](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/17), extending [#16](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/16) / [PR #22](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/pull/22) and collection-vault #15 / PR #21. Inspected source: `075e7d9` (including `032afd4`, `3ec9d40`, `f87f76b`). Core workspace credentials, explicit vault creation/activation, one saved same-network destination and manual confirmation remain the interface; interval automation is a separate spending opt-in, not checkout activation.
+
+Smallest safe default: automation is off, even with a funded vault and saved destination. Standard opt-in: follow the [configuration reference](core-api-setup.md#sweep-automation-configuration). No new environment variables or scheduler dependencies. Reuse the minute worker, store settings, database advisory lock, sweep records, submission helper and external-ID reconciliation. Complexity budget: three operator fields and check metadata only; no rule engine, new persistence framework, cron, webhooks or automatic approval/fueling. No exception is needed. Full available balance is requested; fees may cause rejection, especially for native SOL. Threshold is not a spending cap.
+
+The lock covers eligibility, balance read and durable pending persistence before POST. Checks persist their timestamp even without submission; a crash cannot reset the interval. Pending records block both manual and automatic submissions indefinitely until verified terminal. Missed intervals run once on the next worker pass, never catch up. Changing destination disables automation, requiring explicit opt-in again. Existing manual confirmations are expired by an automatic submission. Workspace/vault identity and destination validation remain mandatory. Production access, wallet activation, checkout payments and Fireblocks policy/approval/signing remain independent boundaries; automation does not enable or bypass them.
+
 ## Uncertain submission / recovery
 
 The server commits a local pending record **before** the transfer request, with a

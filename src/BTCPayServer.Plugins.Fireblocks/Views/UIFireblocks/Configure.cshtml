@@ -72,7 +72,7 @@
 
 @if (Model.Vault is not null)
 {
-    <h2 class="mb-4 mt-4">Manual vault sweep</h2>
+    <h2 class="mb-4 mt-4">Vault sweeps</h2>
     <p>One same-asset transfer on @Model.Vault.AssetId / @Model.Vault.Environment. Verify the destination belongs to this network: Solana addresses do not identify their network. Fees may require native SOL. No automatic fueling, signing or approvals.</p>
     <form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]">
         <label for="sweep-destination" class="form-label">Saved sweep wallet destination</label>
@@ -82,10 +82,24 @@
         <p class="form-text">Sweep now uses the saved destination, not unsaved edits. You will review and confirm before submission.</p>
         <button type="submit" name="command" value="refresh" class="btn btn-secondary">Refresh sweep status</button>
     </form>
+    <form method="post" asp-action="Sweep" asp-route-storeId="@Context.Request.RouteValues["storeId"]" class="mt-3">
+        <div class="form-check">
+            <input id="sweep-automation" name="automationEnabled" type="checkbox" value="true" checked="@Model.Sweeps.AutomationEnabled" class="form-check-input" />
+            <label for="sweep-automation" class="form-check-label">Enable automatic full-available-balance sweeps (may spend funds without per-transfer confirmation)</label>
+        </div>
+        <label for="sweep-interval" class="form-label">Check interval (minutes, 1–525600)</label>
+        <input id="sweep-interval" name="checkIntervalMinutes" type="number" min="1" max="525600" value="@Model.Sweeps.CheckIntervalMinutes" class="form-control" />
+        <label for="sweep-minimum" class="form-label">Minimum available balance (@Model.Vault.AssetId)</label>
+        <input id="sweep-minimum" name="minimumAvailableBalance" value="@Model.Sweeps.MinimumAvailableBalance" class="form-control" />
+        <button type="submit" name="command" value="automation" class="btn btn-warning mt-2">Save automation settings</button>
+        <p class="form-text">Off by default. Uses only the saved destination above; changing it disables automation. The minimum is a trigger, not a spending cap. Fees may cause full-balance sweeps to fail. Policy, approvals and signing remain in Fireblocks.</p>
+    </form>
+    <p>Last automatic check: @Model.Sweeps.LastCheckAt · @Model.Sweeps.CheckDiagnostic</p>
+    <p>Last submission attempt: @Model.Sweeps.Records.Where(r => r.SubmittedAt != null).OrderByDescending(r => r.SubmittedAt).FirstOrDefault()?.SubmittedAt</p>
     @foreach (var sweep in Model.Sweeps.Records.Where(r => r.State != "Expired" && r.State != "Confirmation").OrderByDescending(r => r.CreatedAt))
     {
         <div class="border rounded p-3 mt-2">
-            <strong>@sweep.State · @sweep.ProviderStatus</strong>
+            <strong>@(sweep.Automatic ? "Automatic" : "Manual") · @sweep.State · @sweep.ProviderStatus</strong>
             <p>@sweep.CreatedAt · @sweep.Amount @sweep.AssetId · @sweep.Environment · Vault @sweep.VaultId → <code>@sweep.Destination</code></p>
             <p>@sweep.Diagnostic</p>
             <p>Fireblocks transaction: <code>@sweep.TransactionId</code> · External ID: <code>@sweep.Id</code></p>

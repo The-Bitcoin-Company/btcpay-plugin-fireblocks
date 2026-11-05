@@ -251,13 +251,189 @@ public class VaultSweepTests
         Assert.Equal("Pending", (await h.Service.Get("store")).Records.Single().State);
     }
 
+    [Fact]
+    public async Task AutomationIsOffByDefaultEvenWithSavedDestination()
+    {
+        var h = new Harness();
+        await h.Service.SaveDestination("store", Destination);
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        Assert.False((await h.Service.Get("store")).AutomationEnabled);
+        Assert.Null((await h.Service.Get("store")).LastCheckAt);
+        Assert.Equal(0, h.BalanceReads);
+        Assert.Equal(0, h.Posts);
+    }
+
+    [Theory]
+    [InlineData("9", 0)]
+    [InlineData("10", 1)]
+    [InlineData("10.123456789", 1)]
+    public async Task AutomaticThresholdUsesAvailableBalanceAndSharedSubmission(string balance, int posts)
+    {
+        var h = new Harness { Balance = balance };
+        await h.Enable();
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        var saved = await h.Service.Get("store");
+        Assert.Equal(h.Clock.Now, saved.LastCheckAt);
+        Assert.Equal(posts, h.Posts);
+        if (posts == 0) Assert.Contains("below", saved.CheckDiagnostic);
+        else
+        {
+            var record = Assert.Single(saved.Records);
+            Assert.True(record.Automatic);
+            Assert.Equal(h.Clock.Now, record.SubmittedAt);
+            Assert.Equal(balance, record.Amount);
+            Assert.Equal(Destination, record.Destination);
+            Assert.Equal("Pending", record.State);
+            Assert.Equal("Pending", h.StateAtSubmission);
+            using var body = JsonDocument.Parse(h.Body!);
+            Assert.Equal(record.Id, body.RootElement.GetProperty("externalTxId").GetString());
+            Assert.Equal(record.Id, h.Key);
+            Assert.Equal("TRANSFER", body.RootElement.GetProperty("operation").GetString());
+            Assert.Equal(Destination, body.RootElement.GetProperty("destination").GetProperty("oneTimeAddress").GetProperty("address").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task IntervalBoundaryPersistsAcrossRestartAndMissedChecksDoNotCatchUp()
+    {
+        var h = new Harness { Balance = "9" };
+        await h.Enable();
+        await h.Service.CheckAutomation("store");
+        var first = h.Clock.Now;
+        h.Service = h.NewService();
+        h.Clock.Now = first.AddMinutes(60).AddTicks(-1);
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(1, h.BalanceReads);
+        h.Clock.Now = first.AddMinutes(60);
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(2, h.BalanceReads);
+        h.Clock.Now = first.AddDays(3);
+        h.Balance = "10";
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        Assert.Equal(3, h.BalanceReads);
+        Assert.Equal(1, h.Posts);
+        Assert.Equal(h.Clock.Now, (await h.Service.Get("store")).LastCheckAt);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("")]
+    [InlineData("SECRET")]
+    public async Task UnavailableOrFullyLockedAvailableBalanceNeverUsesTotal(string balance)
+    {
+        var h = new Harness { Balance = balance };
+        await h.Enable();
+        await h.Service.CheckAutomation("store");
+        var saved = await h.Service.Get("store");
+        Assert.Equal(0, h.Posts);
+        Assert.Empty(saved.Records);
+        Assert.Contains("Check failed", saved.CheckDiagnostic);
+        Assert.DoesNotContain("SECRET", saved.CheckDiagnostic);
+        Assert.NotNull(saved.LastCheckAt);
+    }
+
+    [Fact]
+    public async Task OverlappingServicesCreateOneSweepAndRestartCannotRepeatUncertainPost()
+    {
+        var h = new Harness { LoseResponse = true, NotFound = true };
+        await h.Enable();
+        var services = Enumerable.Range(0, 8).Select(_ => h.NewService()).ToArray();
+        await Task.WhenAll(services.Select(s => s.CheckAutomation("store")));
+        Assert.Equal(1, h.Posts);
+        Assert.Single((await h.Service.Get("store")).Records);
+        h.Service = h.NewService();
+        h.Clock.Now = h.Clock.Now.AddDays(2);
+        await h.Service.ReconcileOutstanding(CancellationToken.None);
+        Assert.Equal(1, h.Posts);
+        Assert.Contains("unresolved", (await h.Service.Get("store")).CheckDiagnostic);
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.Prepare("store"));
+    }
+
+    [Fact]
+    public async Task ManualPendingBlocksAutomationAndAutomaticSubmissionExpiresOldConfirmations()
+    {
+        var h = new Harness();
+        var draft = await h.Draft();
+        await h.Enable();
+        await h.Service.Confirm("store", draft.Id, "1");
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(1, h.Posts);
+        Assert.Contains("unresolved", (await h.Service.Get("store")).CheckDiagnostic);
+        await h.Service.Refresh("store");
+        var old = await h.Service.Prepare("store");
+        h.Clock.Now = h.Clock.Now.AddMinutes(60);
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(2, h.Posts);
+        Assert.Equal("Expired", (await h.Service.Confirm("store", old.Id, "1")).State);
+        Assert.Equal(2, h.Posts);
+    }
+
+    [Theory]
+    [InlineData(0, "10")]
+    [InlineData(525601, "10")]
+    [InlineData(60, "")]
+    [InlineData(60, "0")]
+    [InlineData(60, "-1")]
+    [InlineData(60, "NaN")]
+    [InlineData(60, "1e2")]
+    [InlineData(60, "0.0000000001")]
+    public async Task InvalidAutomationInputsAndCorruptSavedSettingsFailClosed(int interval, string minimum)
+    {
+        var h = new Harness();
+        await h.Service.SaveDestination("store", Destination);
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.SaveAutomation("store", true, interval, minimum));
+        Assert.False((await h.Service.Get("store")).AutomationEnabled);
+        var saved = await h.Service.Get("store");
+        saved.AutomationEnabled = true;
+        saved.CheckIntervalMinutes = interval;
+        saved.MinimumAvailableBalance = minimum;
+        await h.Store.Save("store", saved);
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(0, h.Posts);
+        Assert.Contains("Check failed", (await h.Service.Get("store")).CheckDiagnostic);
+        await h.Service.SaveAutomation("store", false, interval, minimum);
+        Assert.False((await h.Service.Get("store")).AutomationEnabled);
+    }
+
+    [Fact]
+    public async Task DestinationAndWorkspaceSafetyGatesApplyWithoutManualConfirmation()
+    {
+        var h = new Harness();
+        await Assert.ThrowsAsync<CoreApiException>(() => h.Service.SaveAutomation("store", true, 60, "10"));
+        await h.Enable();
+        await h.Service.SaveDestination("store", "So11111111111111111111111111111111111111112");
+        Assert.False((await h.Service.Get("store")).AutomationEnabled);
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(0, h.Posts);
+        await h.Service.SaveAutomation("store", true, 60, "10");
+        h.Credentials.Settings.ApiKey = "other";
+        await h.Service.CheckAutomation("store");
+        Assert.Equal(0, h.Posts);
+        await h.Service.SaveAutomation("store", false, 0, null);
+        Assert.False((await h.Service.Get("store")).AutomationEnabled);
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     private sealed class Harness : HttpMessageHandler
     {
         public readonly MemoryStore Store = new();
         public readonly Credentials Credentials;
         public VaultSweepService Service;
         public string Balance = "10.123456789", Status = "COMPLETED", CreateTransactionId = "tx";
-        public int Posts;
+        public int Posts, BalanceReads;
+        public readonly Clock Clock = new();
+        public async Task Enable()
+        {
+            await Service.SaveDestination("store", Destination);
+            await Service.SaveAutomation("store", true, 60, "10");
+        }
         public bool LoseResponse, NotFound, WrongIdentity;
         public HttpStatusCode? Reject;
         public string? Body, Key, StateAtSubmission, LastLookup;
@@ -268,7 +444,7 @@ public class VaultSweepTests
             Store.Vault = new() { State = "Success", VaultAccountId = "42", AssetId = "SOL_TEST", Environment = "Sandbox", WorkspaceFingerprint = VaultProvisioningService.Fingerprint(Credentials.Settings) };
             Service = NewService();
         }
-        public VaultSweepService NewService() => new(new CoreApiClient(new HttpClient(this)), Credentials, Store, Store);
+        public VaultSweepService NewService() => new(new CoreApiClient(new HttpClient(this)), Credentials, Store, Store, timeProvider: Clock);
         public async Task<SweepRecord> Draft() { await Service.SaveDestination("store", Destination); return await Service.Prepare("store"); }
         public UIFireblocksController Controller()
         {
@@ -298,7 +474,8 @@ public class VaultSweepTests
                 if (NotFound) return new(HttpStatusCode.NotFound) { Content = new StringContent("SECRET") };
                 return Json(new { id = "tx", externalTxId = WrongIdentity ? "other" : (await Store.Get("store")).Records.Last(r => r.Unresolved).Id, assetId = "SOL_TEST", status = Status, subStatus = "SECRET" });
             }
-            return Json(new { available = Balance });
+            BalanceReads++;
+            return Json(new { available = Balance, total = "1000", lockedAmount = "1000" });
         }
         private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(value)) };
     }

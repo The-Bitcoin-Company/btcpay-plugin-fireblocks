@@ -163,13 +163,18 @@ public sealed class UIFireblocksController(
 
     [HttpPost("sweep")]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Sweep(string command, string? destination, string? id, string? amount)
+    public async Task<IActionResult> Sweep(string command, string? destination, string? id, string? amount,
+        bool automationEnabled = false, int checkIntervalMinutes = 60, string? minimumAvailableBalance = null)
     {
         if (sweeps is null) return NotFound();
         try
         {
             switch (command)
             {
+                case "automation":
+                    if (automationEnabled && !ModelState.IsValid) return BadRequest();
+                    await sweeps.SaveAutomation(CurrentStore.Id, automationEnabled, checkIntervalMinutes, minimumAvailableBalance);
+                    break;
                 case "save": await sweeps.SaveDestination(CurrentStore.Id, destination); break;
                 case "prepare": return View("Sweep", await sweeps.Prepare(CurrentStore.Id));
                 case "confirm" when id is not null: await sweeps.Confirm(CurrentStore.Id, id, amount); break;

@@ -18,6 +18,8 @@ public sealed class SweepRecord
     public string Destination { get; set; } = "";
     public string Amount { get; set; } = "";
     public string State { get; set; } = "Confirmation";
+    public bool Automatic { get; set; }
+    public DateTimeOffset? SubmittedAt { get; set; }
     public string? TransactionId { get; set; }
     public string ProviderStatus { get; set; } = "";
     public string Diagnostic { get; set; } = "";
@@ -28,6 +30,11 @@ public sealed class VaultSweepSettings
 {
     public string Destination { get; set; } = "";
     public List<SweepRecord> Records { get; set; } = [];
+    public bool AutomationEnabled { get; set; }
+    public int CheckIntervalMinutes { get; set; } = 60;
+    public string MinimumAvailableBalance { get; set; } = "";
+    public DateTimeOffset? LastCheckAt { get; set; }
+    public string CheckDiagnostic { get; set; } = "";
 }
 
 public interface IVaultSweepStore
@@ -48,7 +55,8 @@ public sealed class VaultSweepStore(StoreRepository stores) : IVaultSweepStore
 }
 
 public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStore credentials,
-    IVaultProvisioningStore vaults, IVaultSweepStore store, ILogger<VaultSweepService>? logger = null)
+    IVaultProvisioningStore vaults, IVaultSweepStore store, ILogger<VaultSweepService>? logger = null,
+    TimeProvider? timeProvider = null)
 {
     public Task<VaultSweepSettings> Get(string storeId) => store.Get(storeId);
 
@@ -72,6 +80,7 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         var (vault, _) = await Context(storeId);
         if (destination == vault.Address) throw new CoreApiException("The destination must differ from the collection vault address.");
         var saved = await store.Get(storeId);
+        if (saved.Destination != destination) saved.AutomationEnabled = false;
         saved.Destination = destination;
         await store.Save(storeId, saved);
     }
@@ -132,7 +141,14 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
             throw new CoreApiException("Sweep settings changed or confirmation expired. Start again from settings.");
         var available = await Balance(settings, vault);
         record.Amount = ValidateAmount(amount, record.AssetId, available).ToString(CultureInfo.InvariantCulture);
+        return await Submit(storeId, saved, record, settings);
+    }
+
+    // Called only while holding the shared vault lock, by manual and automatic paths.
+    private async Task<SweepRecord> Submit(string storeId, VaultSweepSettings saved, SweepRecord record, CoreApiSettings settings)
+    {
         record.State = "Pending";
+        record.SubmittedAt = (timeProvider ?? TimeProvider.System).GetUtcNow();
         record.Diagnostic = "Submission is unresolved. Refresh to reconcile; no automatic resubmission is performed.";
         // Never POST this record again, even if the process dies before the request.
         // The permanent externalTxId, not the expiring HTTP key, is the recovery identity.
@@ -161,6 +177,79 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
         }
         await store.Save(storeId, saved);
         return record;
+    }
+
+    public async Task SaveAutomation(string storeId, bool enabled, int intervalMinutes, string? minimum)
+    {
+        await using var lease = await vaults.Lock(storeId);
+        var saved = await store.Get(storeId);
+        // Disabling must always remain possible, even with missing credentials or bad inputs.
+        if (enabled)
+        {
+            var (vault, _) = await Context(storeId);
+            ValidateAutomation(intervalMinutes, minimum, vault.AssetId);
+            if (!FireblocksStoreConfig.IsValidSolanaAddress(saved.Destination) || saved.Destination == vault.Address)
+                throw new CoreApiException("Save a different same-network sweep destination before enabling automation.");
+            saved.CheckIntervalMinutes = intervalMinutes;
+            saved.MinimumAvailableBalance = minimum!;
+        }
+        saved.AutomationEnabled = enabled;
+        await store.Save(storeId, saved);
+    }
+
+    private static decimal ValidateAutomation(int interval, string? minimum, string assetId)
+    {
+        if (interval is < 1 or > 525600)
+            throw new CoreApiException("Check interval must be between 1 and 525600 minutes.");
+        return ValidateAmount(minimum, assetId, decimal.MaxValue);
+    }
+
+    public async Task CheckAutomation(string storeId)
+    {
+        await using var lease = await vaults.Lock(storeId);
+        var saved = await store.Get(storeId);
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        if (!saved.AutomationEnabled) return;
+        // Validate persisted intervals before arithmetic: corrupted configuration fails closed.
+        if (saved.CheckIntervalMinutes is >= 1 and <= 525600 && saved.LastCheckAt is { } last &&
+            now - last < TimeSpan.FromMinutes(saved.CheckIntervalMinutes)) return;
+        saved.LastCheckAt = now;
+        saved.CheckDiagnostic = "Check interrupted or unresolved. No automatic retry of a submission is performed.";
+        await store.Save(storeId, saved);
+        try
+        {
+            var (vault, settings) = await Context(storeId);
+            var minimum = ValidateAutomation(saved.CheckIntervalMinutes, saved.MinimumAvailableBalance, vault.AssetId);
+            if (!FireblocksStoreConfig.IsValidSolanaAddress(saved.Destination) || saved.Destination == vault.Address)
+                throw new CoreApiException("Invalid saved destination.");
+            if (saved.Records.Any(r => r.Unresolved))
+                saved.CheckDiagnostic = "Skipped: an earlier sweep is unresolved.";
+            else
+            {
+                var available = await Balance(settings, vault);
+                if (available < minimum) saved.CheckDiagnostic = "Skipped: available balance is below the minimum.";
+                else
+                {
+                    var record = new SweepRecord
+                    {
+                        CreatedAt = now, Automatic = true, VaultId = vault.VaultAccountId!, AssetId = vault.AssetId,
+                        Environment = vault.Environment, WorkspaceFingerprint = vault.WorkspaceFingerprint,
+                        Destination = saved.Destination,
+                        Amount = ValidateAmount(available.ToString(CultureInfo.InvariantCulture), vault.AssetId, available).ToString(CultureInfo.InvariantCulture)
+                    };
+                    foreach (var old in saved.Records.Where(r => r.State == "Confirmation")) old.State = "Expired";
+                    saved.Records.Add(record);
+                    saved.CheckDiagnostic = "Eligible: see the shared sweep history for submission and provider status.";
+                    await Submit(storeId, saved, record, settings);
+                    return;
+                }
+            }
+        }
+        catch (CoreApiException)
+        {
+            saved.CheckDiagnostic = "Check failed. Verify original workspace, settings, available balance and connectivity in Fireblocks. No automatic remediation is performed.";
+        }
+        await store.Save(storeId, saved);
     }
 
     public async Task Refresh(string storeId)
@@ -212,8 +301,8 @@ public sealed class VaultSweepService(CoreApiClient client, ICoreApiSettingsStor
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (!(await store.Get(id)).Records.Any(r => r.Unresolved)) continue;
-                await Refresh(id);
+                if ((await store.Get(id)).Records.Any(r => r.Unresolved)) await Refresh(id);
+                await CheckAutomation(id);
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
