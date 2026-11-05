@@ -1,6 +1,6 @@
 # Core Fireblocks API connection
 
-The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test, collection-vault provisioning and [confirmed manual same-network vault sweeps](manual-vault-sweep.md). Scheduling, exchange transfers and automatic SOL fueling are not supported.
+The **Core Fireblocks API** section under the store's Fireblocks integration is independent of Dynamic Flow. It provides a signed, read-only connection test, collection-vault provisioning and [confirmed manual same-network vault sweeps](manual-vault-sweep.md). Optional fixed-interval sweeps are available; exchange transfers and automatic SOL fueling are not supported.
 
 ## Workspace setup
 
@@ -40,5 +40,19 @@ Save core settings first, then select a supported asset under **Collection vault
 A ready production-compatible vault exposes **Use address (replace saved destination)**. This explicit confirmation saves the destination without replacing credentials or enabling checkout. Sandbox/test results are visibly non-production and cannot be applied to the mainnet destination; existing checkout remains unchanged. Provisioning metadata (vault ID, asset ID, address, workspace environment and a hashed workspace identity) is stored separately as `Fireblocks.CollectionVault`, independent of Dynamic settings.
 
 Each store gets one provisioning operation. Refreshes/resubmissions reuse it, serialized across server processes. The account POST uses a persisted idempotency key and identical body; wallet retries address the same vault/asset pair. If an account, wallet or reactivation response remains ambiguous after 23 hours, that creation step stops rather than risking duplication beyond Fireblocks' 24-hour idempotency window. Definite account/wallet validation or permission rejections remain retryable after correction, even days later; a new account retry identity is only allocated after a definite rejection, never after an ambiguous response. Reconcile the named **BTCPay collection** account in the console before any manual recovery; do not delete the operation setting and retry blindly. There is no UI reset or arbitrary existing-vault linking. Restore the original workspace credentials to refresh an operation after switching workspaces. Back up the provisioning record with the database.
+
+## Sweep automation configuration
+
+Canonical reference for sweep settings (`Fireblocks.VaultSweeps`, server-side per-store/vault database settings). No environment variables are added. Default/unset automation is **off**, interval is **60 minutes**, minimum is **unset** (cannot enable until supplied). Existing core credentials, collection-vault binding and saved destination remain prerequisites; Dynamic checkout settings are independent.
+
+| Setting | Purpose / validation | Dependencies and lifecycle |
+| --- | --- | --- |
+| Automation enabled | Explicit irreversible-operation opt-in, default false | Requires ready original-workspace vault, saved different valid Solana destination and valid interval/minimum. Disabling requires no credentials. Destination changes disable it; restart preserves it. |
+| Check interval minutes | Fixed interval, integer 1–525600; default 60 | Routine tuning, not a second activation switch. Last check persists; first enable checks on next worker pass, subsequent checks at or after last check + interval. No catch-up queue. |
+| Minimum available balance | Positive decimal in asset units, USDC ≤6 or SOL test ≤9 decimal places; unset invalid for enabling | Threshold only, not a budget/cap. Available balance ≥ minimum requests the entire available balance. No total/locked-balance fallback. No lifetime budget or reset semantics. |
+
+Validation: `VaultSweepService.SaveAutomation`, `ValidateAutomation`, `ValidateAmount` and `CheckAutomation`; tests: `VaultSweepTests`. Invalid saved values fail closed with a redacted check diagnostic. Checks and both submission paths share the existing database lock. Unresolved sweeps block further transfers; approvals/signing and native-gas needs are never bypassed. Last check, last submission attempt and shared manual/automatic history are visible in settings. A crash-before-POST remains blocked as described in [recovery](manual-vault-sweep.md#uncertain-submission--recovery).
+
+**Default operation:** save core credentials, provision a vault explicitly, save a destination; leave automatic sweeps unchecked. No automatic transfer occurs. **Standard activation:** in Collection vault → Vault sweeps, verify the saved destination/network, enter an interval (for example 60) and positive minimum in the displayed asset units, check Enable automatic full-available-balance sweeps, then Save automation settings. This is spending authorization without per-transfer confirmation; normal Fireblocks approval/signing still applies. Uncheck and save to stop new checks (existing pending transfers are not cancelled). Sweep now remains available and confirmation-based whenever no sweep is unresolved. Re-enabling retains last-check timing; changing interval uses the new interval from the last check.
 
 Authentication follows the [Fireblocks JWT contract](https://developers.fireblocks.com/reference/signing-a-request-jwt-structure): RS256, per-request nonce, exact path/query, short expiration and SHA-256 request body hash.

@@ -24,6 +24,14 @@ fees; choose a smaller amount. No auto-fueling or remediation is attempted.
 Provider error bodies and substatus text are never displayed or logged by the
 sweep implementation; safe guidance directs the operator to the console.
 
+## Minimal-safe design: optional interval sweeps
+
+This is the cumulative vault/sweep interface for [#17](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/17), extending [#16](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/issues/16) / [PR #22](https://github.com/The-Bitcoin-Company/btcpay-plugin-fireblocks/pull/22) and collection-vault #15 / PR #21. Inspected source: `075e7d9` (including `032afd4`, `3ec9d40`, `f87f76b`). Core workspace credentials, explicit vault creation/activation, one saved same-network destination and manual confirmation remain the interface; interval automation is a separate spending opt-in, not checkout activation.
+
+Smallest safe default: automation is off, even with a funded vault and saved destination. Standard opt-in: follow the [configuration reference](core-api-setup.md#sweep-automation-configuration). No new environment variables or scheduler dependencies. Reuse the minute worker, store settings, database advisory lock, sweep records, submission helper and external-ID reconciliation. Complexity budget: three operator fields and check metadata only; no rule engine, new persistence framework, cron, webhooks or automatic approval/fueling. No exception is needed. Full available balance is requested; fees may cause rejection, especially for native SOL. Threshold is not a spending cap.
+
+The lock covers eligibility, balance read and durable pending persistence before POST. Checks persist their timestamp even without submission; a crash cannot reset the interval. Pending records block both manual and automatic submissions indefinitely until verified terminal. Missed intervals run once on the next worker pass, never catch up. Changing destination disables automation, requiring explicit opt-in again. Existing manual confirmations are expired by an automatic submission. Workspace/vault identity and destination validation remain mandatory. Production access, wallet activation, checkout payments and Fireblocks policy/approval/signing remain independent boundaries; automation does not enable or bypass them.
+
 ## Uncertain submission / recovery
 
 The server commits a local pending record **before** the transfer request, with a
@@ -50,6 +58,26 @@ Records and destination are independent server-side store settings, surviving
 restart and Dynamic configuration deletion. Protect the database and backups;
 restoring a backup from before a sweep can lose its identity and is not a supported
 way to retry. Keep transaction history for reconciliation.
+
+## Fresh-environment evidence
+
+At source revision `cf27616`, the full `nix develop --command bash scripts/ci.sh` gate passed: 232 tests, build and package/checksum verification. The following isolated mock-provider exercise also passed all 63 `VaultSweepTests` cases:
+
+```sh
+nix develop --command bash -c '
+  fresh=$(mktemp -d)
+  trap "rm -rf \"$fresh\"" EXIT
+  env -i HOME="$fresh" XDG_CONFIG_HOME="$fresh/config" XDG_STATE_HOME="$fresh/state" \
+    PATH="$PATH" DOTNET_ROOT="${DOTNET_ROOT:-}" \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+    dotnet test tests/BTCPayServer.Plugins.Fireblocks.Tests -c Release \
+      --no-build --no-restore --filter FullyQualifiedName~VaultSweepTests
+'
+```
+
+Prerequisites: restored/built checkout and pinned SDK from the normal CI gate. Feature environment is cleared; HOME/config/state are temporary. Each test starts with empty serialized store settings, generated ephemeral RSA credentials and an in-memory ready Sandbox `SOL_TEST` vault; no provider credentials, real network calls or funds. Default operation (`AutomationIsOffByDefaultEvenWithSavedDestination`) performed zero balance reads/transfers. Standard opt-in (`AutomaticThresholdUsesAvailableBalanceAndSharedSubmission`) saved destination, enabled a 60-minute interval and minimum 10: available 9 submitted zero transfers, available 10 or 10.123456789 submitted exactly one full-available-balance transfer to the saved destination. Invalid/unset minimum, invalid interval/precision, wrong workspace, changed destination, unavailable/locked balance and unresolved records failed closed. Interval boundary, missed checks, concurrent service instances and restart/uncertain response were exercised. No lifetime budget/reset or conflicting environment variables exist.
+
+Limitation: serialization is tested with the fake store's shared lock; production cross-process serialization reuses the existing PostgreSQL advisory transaction lock, inspected in `VaultProvisioningStore.Lock`, not a new live multi-server database exercise. UI binding/rendering is build-checked, not browser-tested. Real approval/signing, fees and provider balance freshness need the operator-owned Sandbox exercise below; automation never bypasses these. No live service was activated.
 
 ## Small Sandbox acceptance exercise
 
